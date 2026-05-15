@@ -9,8 +9,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +31,7 @@ const (
 	DefaultMaxIdleConns            = 1024
 	DefaultIdleTimeoutSec          = 90
 	DefaultForceHTTP1              = true
+	LowDiskSpaceWarningBytes       = int64(2 * 1024 * 1024 * 1024)
 	jsonSaveInterval               = 5000
 )
 
@@ -148,6 +152,18 @@ func runDownload(args []string) error {
 	}
 	options.outputPath = filepath.Join(options.outputDir, options.outputPath)
 	fmt.Println("Output:", options.outputPath)
+	if info.Size > 0 {
+		freeSpace, err := availableDiskSpace(options.outputPath)
+		if err != nil {
+			return fmt.Errorf("disk space check failed: %w", err)
+		}
+		if freeSpace < info.Size {
+			return fmt.Errorf("insufficient disk space: need %s, available %s", formatBytesBinary(int(info.Size)), formatBytesBinary(int(freeSpace)))
+		}
+		if freeSpace-info.Size < LowDiskSpaceWarningBytes {
+			fmt.Printf("warning: low remaining disk space after download: %s left\n", formatBytesBinary(int(freeSpace-info.Size)))
+		}
+	}
 
 	if options.autoBuffer && !options.bufferSizeSet {
 		rec, err := RecommendBufferSizeForPath(options.outputPath)
@@ -916,4 +932,48 @@ func defaultDownloadDir() string {
 		return filepath.Join(home, "Downloads")
 	}
 	return "."
+}
+
+func availableDiskSpace(targetPath string) (int64, error) {
+	absPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		return 0, err
+	}
+
+	checkPath := filepath.Dir(absPath)
+	if runtime.GOOS == "windows" {
+		volume := filepath.VolumeName(absPath)
+		if volume == "" {
+			return 0, errors.New("unable to determine target volume")
+		}
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", fmt.Sprintf("[int64](Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='%s'\").FreeSpace", volume))
+		out, err := cmd.Output()
+		if err != nil {
+			return 0, err
+		}
+		free, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return free, nil
+	}
+
+	cmd := exec.Command("df", "-Pk", checkPath)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		return 0, errors.New("unexpected df output")
+	}
+	fields := strings.Fields(lines[len(lines)-1])
+	if len(fields) < 4 {
+		return 0, errors.New("unexpected df output fields")
+	}
+	availableKB, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return availableKB * 1024, nil
 }
