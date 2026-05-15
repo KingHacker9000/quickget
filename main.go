@@ -28,7 +28,7 @@ const (
 	// DefaultDynamicSplitting is the default value for dynamic splitting.
 	DefaultDynamicSplitting = true
 	// DefaultMinSplitSizeBytes is the minimum size of each split chunk.
-	DefaultMinSplitSizeBytes = 8 * 1024 * 1024
+	DefaultMinSplitSizeBytes = 32 * 1024 * 1024
 	// DefaultMinDynamicFileSizeBytes is the minimum file size for dynamic splitting.
 	DefaultMinDynamicFileSizeBytes = 64 * 1024 * 1024
 	// DefaultMaxIdleConns is the default maximum number of idle connections across all hosts.
@@ -36,7 +36,7 @@ const (
 	// DefaultIdleTimeoutSec is the default idle connection timeout in seconds.
 	DefaultIdleTimeoutSec = 90
 	// DefaultForceHTTP1 controls whether HTTP/1.1 is forced by default.
-	DefaultForceHTTP1 = false
+	DefaultForceHTTP1 = true
 	// jsonSaveInterval controls how often the download manifest is saved to disk during the download process.
 	jsonSaveInterval = 1000
 )
