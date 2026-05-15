@@ -103,3 +103,41 @@ func TestFetchRemoteFileStats_AcceptRangesOtherOrMissingIsUnsupported(t *testing
 		})
 	}
 }
+
+func TestDetectOutputFilename(t *testing.T) {
+	tests := []struct {
+		name               string
+		rawURL             string
+		contentDisposition string
+		want               string
+	}{
+		{
+			name:               "content disposition filename wins",
+			rawURL:             "https://example.com/download",
+			contentDisposition: "attachment; filename=\"release.zip\"",
+			want:               "release.zip",
+		},
+		{
+			name:               "url basename extraction",
+			rawURL:             "https://example.com/files/archive.tar.gz?token=abc",
+			contentDisposition: "",
+			want:               "archive.tar.gz",
+		},
+		{
+			// No basename and no usable header should remain deterministic.
+			name:               "fallback filename",
+			rawURL:             "https://example.com/",
+			contentDisposition: "",
+			want:               "download.bin",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DetectOutputFilename(tc.rawURL, tc.contentDisposition)
+			if got != tc.want {
+				t.Fatalf("unexpected filename: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}

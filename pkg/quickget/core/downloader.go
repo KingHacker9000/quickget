@@ -241,6 +241,9 @@ func splitIntoChunks(size int64, connections int) []manifest.Chunk {
 	if size <= 0 || connections <= 0 {
 		return nil
 	}
+	if int64(connections) > size {
+		connections = int(size)
+	}
 
 	chunks := make([]manifest.Chunk, 0, connections)
 	baseSize := size / int64(connections)

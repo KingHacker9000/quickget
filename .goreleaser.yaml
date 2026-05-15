@@ -1,0 +1,32 @@
+version: 2
+
+project_name: quickget
+
+builds:
+  - id: quickget
+    binary: quickget
+    main: ./cmd/quickget
+    goos:
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    builds:
+      - quickget
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: git
