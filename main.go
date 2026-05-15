@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -67,6 +68,120 @@ func preallocateFile(outputPath string, size int64) error {
 	defer f.Close()
 
 	return f.Truncate(size)
+}
+
+func downloadChunk(rawURL string, outputPath string, chunk *Chunk, progressChan chan<- int64) error {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", chunk.Start, chunk.End))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("expected 206 Partial Content, got %s", resp.Status)
+	}
+
+	file, err := os.OpenFile(outputPath, os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	buf := make([]byte, 256*1024)
+	offset := chunk.Start
+
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			written, writeErr := file.WriteAt(buf[:n], offset)
+			if writeErr != nil {
+				return writeErr
+			}
+			offset += int64(written)
+			chunk.Downloaded += int64(written)
+			progressChan <- int64(written)
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+
+	chunk.Done = true
+	return nil
+}
+
+func downloadParallel(rawURL string, outputPath string, totalSize int64, connections int) error {
+	chunks := splitIntoChunks(totalSize, connections)
+	if len(chunks) == 0 {
+		return fmt.Errorf("cannot split file into chunks")
+	}
+
+	if err := preallocateFile(outputPath, totalSize); err != nil {
+		return err
+	}
+
+	progressChan := make(chan int64, connections*4)
+	errChan := make(chan error, len(chunks))
+
+	var wg sync.WaitGroup
+	for i := range chunks {
+		wg.Add(1)
+		chunk := &chunks[i]
+		go func() {
+			defer wg.Done()
+			if err := downloadChunk(rawURL, outputPath, chunk, progressChan); err != nil {
+				errChan <- fmt.Errorf("chunk %d failed: %w", chunk.Index, err)
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(progressChan)
+		close(errChan)
+	}()
+
+	var downloaded int64
+	start := time.Now()
+	lastPrint := start
+	lastBytes := int64(0)
+
+	for n := range progressChan {
+		downloaded += n
+		now := time.Now()
+		if now.Sub(lastPrint) >= time.Second || downloaded == totalSize {
+			interval := now.Sub(lastPrint).Seconds()
+			if interval <= 0 {
+				interval = 1
+			}
+			speedMBps := float64(downloaded-lastBytes) / (1024 * 1024) / interval
+			downloadedMB := float64(downloaded) / (1024 * 1024)
+			totalMB := float64(totalSize) / (1024 * 1024)
+			percent := (float64(downloaded) / float64(totalSize)) * 100
+			fmt.Printf("\rDownloaded: %.2f MB / %.2f MB (%.1f%%) Speed: %.2f MB/s", downloadedMB, totalMB, percent, speedMBps)
+			lastPrint = now
+			lastBytes = downloaded
+		}
+	}
+	fmt.Println()
+
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // getFileInfo performs a HEAD request to the given URL and returns the final URL after redirects,
@@ -224,11 +339,12 @@ func main() {
 		}
 	}
 
-	if size >= 0 {
-		if err := preallocateFile(*out, size); err != nil {
-			fmt.Fprintf(os.Stderr, "error: preallocate failed: %v\n", err)
+	if size > 0 && rangeSupported {
+		if err := downloadParallel(finalURL, *out, size, *workers); err != nil {
+			fmt.Fprintf(os.Stderr, "error: parallel download failed: %v\n", err)
 			os.Exit(1)
 		}
+		return
 	}
 
 	if err := downloadSingle(finalURL, *out, size); err != nil {
