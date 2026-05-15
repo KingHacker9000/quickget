@@ -33,6 +33,7 @@ const (
 
 type downloadOptions struct {
 	outputPath         string
+	outputDir          string
 	workers            int
 	retries            int
 	verbose            bool
@@ -77,17 +78,8 @@ func runDownload(args []string) error {
 	}
 
 	client := newHTTPClient(options.workers, options.forceHTTP1, options.maxIdleConns, options.idleTimeoutSec)
-	if options.autoBuffer && !options.bufferSizeSet {
-		rec, err := RecommendBufferSizeForPath(options.outputPath)
-		if err != nil {
-			return fmt.Errorf("auto buffer tune failed: %w", err)
-		}
-		options.bufferSize = rec.BufferSize
-		fmt.Printf("Auto buffer selected: %s (%d bytes)\n", formatBytesBinary(rec.BufferSize), rec.BufferSize)
-	}
 
 	fmt.Println("URL:", validatedURL)
-	fmt.Println("Output:", options.outputPath)
 	fmt.Println("Parallel connections:", options.workers)
 	fmt.Println("Dynamic splitting:", options.dynamic)
 	fmt.Println("Queue mode:", options.queueMode)
@@ -103,6 +95,23 @@ func runDownload(args []string) error {
 	fmt.Println("Final URL:", info.FinalURL)
 	fmt.Println("File size:", info.Size)
 	fmt.Println("Range supported:", info.RangeSupported)
+	if options.outputPath == "" {
+		options.outputPath = info.SuggestedOutputName
+	}
+	if options.outputDir == "" {
+		options.outputDir = defaultDownloadDir()
+	}
+	options.outputPath = filepath.Join(options.outputDir, options.outputPath)
+	fmt.Println("Output:", options.outputPath)
+
+	if options.autoBuffer && !options.bufferSizeSet {
+		rec, err := RecommendBufferSizeForPath(options.outputPath)
+		if err != nil {
+			return fmt.Errorf("auto buffer tune failed: %w", err)
+		}
+		options.bufferSize = rec.BufferSize
+		fmt.Printf("Auto buffer selected: %s (%d bytes)\n", formatBytesBinary(rec.BufferSize), rec.BufferSize)
+	}
 
 	if options.queueMode {
 		segments := splitIntoSegments(info.Size, options.segmentSize)
@@ -147,6 +156,7 @@ func parseDownloadOptions(args []string) (downloadOptions, error) {
 	fs.SetOutput(os.Stderr)
 
 	output := fs.String("o", "", "output filename")
+	outputDir := fs.String("dir", "", "download directory (optional; defaults to OS Downloads folder)")
 	workers := fs.Int("n", DefaultParallelConnections, "number of parallel connections")
 	retries := fs.Int("retries", 3, "max retries per chunk")
 	verbose := fs.Bool("v", false, "verbose progress output (includes per-chunk status)")
@@ -171,9 +181,6 @@ func parseDownloadOptions(args []string) (downloadOptions, error) {
 	if fs.NArg() != 1 {
 		printDownloadUsage()
 		return opts, errors.New("exactly one positional URL argument is required")
-	}
-	if *output == "" {
-		return opts, errors.New("-o output filename is required")
 	}
 	if *workers <= 0 {
 		return opts, errors.New("-n must be greater than 0")
@@ -208,6 +215,7 @@ func parseDownloadOptions(args []string) (downloadOptions, error) {
 
 	opts = downloadOptions{
 		outputPath:         *output,
+		outputDir:          strings.TrimSpace(*outputDir),
 		workers:            *workers,
 		retries:            *retries,
 		verbose:            *verbose,
@@ -237,7 +245,9 @@ func printDownloadUsage() {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Download options:")
 	fmt.Fprintln(os.Stderr, "  -o string")
-	fmt.Fprintln(os.Stderr, "        output filename (required)")
+	fmt.Fprintln(os.Stderr, "        output filename (optional; auto-detected when omitted)")
+	fmt.Fprintln(os.Stderr, "  -dir string")
+	fmt.Fprintln(os.Stderr, "        download directory (optional; defaults to OS Downloads folder)")
 	fmt.Fprintf(os.Stderr, "  -n int\n        number of parallel connections (default %d)\n", DefaultParallelConnections)
 	fmt.Fprintln(os.Stderr, "  -retries int")
 	fmt.Fprintln(os.Stderr, "        max retries per chunk (default 3)")
@@ -272,6 +282,7 @@ func normalizeDownloadArgs(args []string) ([]string, error) {
 	}
 	valueFlags := map[string]bool{
 		"o":                     true,
+		"dir":                   true,
 		"n":                     true,
 		"retries":               true,
 		"min-split-size":        true,
@@ -836,4 +847,12 @@ func printStatsLine(writeStats *DownloadStats) {
 		return
 	}
 	fmt.Printf("STATS write_nanos=%d write_pct=%.2f\n", writeStats.WriteNanos(), writeStats.WritePercentApprox())
+}
+
+func defaultDownloadDir() string {
+	home, err := os.UserHomeDir()
+	if err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Join(home, "Downloads")
+	}
+	return "."
 }

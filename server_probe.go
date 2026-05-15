@@ -9,15 +9,17 @@ import (
 )
 
 type ServerProbeResult struct {
-	URL                     string
-	SupportsRange           bool
-	SupportsParallelLikely  bool
-	StatusCode              int
-	ContentLength           int64
-	AcceptRanges            string
-	ContentRange            string
-	SuggestedConnections    int
-	Warnings                []string
+	URL                    string
+	FinalURL               string
+	SupportsRange          bool
+	SupportsParallelLikely bool
+	StatusCode             int
+	ContentLength          int64
+	AcceptRanges           string
+	ContentRange           string
+	SuggestedOutputName    string
+	SuggestedConnections   int
+	Warnings               []string
 }
 
 func ProbeServer(rawURL string, client *http.Client) (*ServerProbeResult, error) {
@@ -39,9 +41,11 @@ func ProbeServer(rawURL string, client *http.Client) (*ServerProbeResult, error)
 
 	result := &ServerProbeResult{
 		URL:                  validatedURL,
+		FinalURL:             headResp.Request.URL.String(),
 		StatusCode:           headResp.StatusCode,
 		ContentLength:        -1,
 		AcceptRanges:         strings.TrimSpace(headResp.Header.Get("Accept-Ranges")),
+		SuggestedOutputName:  detectOutputFilename(headResp.Request.URL.String(), strings.TrimSpace(headResp.Header.Get("Content-Disposition"))),
 		SuggestedConnections: 2,
 	}
 
@@ -111,6 +115,8 @@ func runServerTest(rawURL string) error {
 
 	fmt.Println("Server test:")
 	fmt.Println("URL:", result.URL)
+	fmt.Println("Final URL:", result.FinalURL)
+	fmt.Println("Suggested filename:", result.SuggestedOutputName)
 	if result.ContentLength >= 0 {
 		fmt.Println("Content-Length:", result.ContentLength)
 	} else {
