@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -19,12 +21,15 @@ import (
 // refreshInterval refresh terminal with stats every 200ms
 const refreshInterval = 200
 
+// saveRefreshInterval saves the manifest to disk every 5000ms (5s)
+const saveRefreshInterval = 5000
+
 type Chunk struct {
-	Index      int
-	Start      int64
-	End        int64
-	Downloaded int64
-	Done       bool
+	Index           int
+	Start           int64
+	End             int64
+	DownloadedBytes int64
+	Done            bool
 }
 
 type DownloadManifest struct {
@@ -53,11 +58,11 @@ func splitIntoChunks(size int64, connections int) []Chunk {
 
 		end := start + partSize - 1
 		chunks = append(chunks, Chunk{
-			Index:      i,
-			Start:      start,
-			End:        end,
-			Downloaded: 0,
-			Done:       false,
+			Index:           i,
+			Start:           start,
+			End:             end,
+			DownloadedBytes: 0,
+			Done:            false,
 		})
 		start = end + 1
 	}
@@ -109,12 +114,72 @@ func loadManifest(path string) (*DownloadManifest, error) {
 	return &m, nil
 }
 
-func downloadChunk(rawURL string, outputPath string, chunk *Chunk, downloaded *int64, chunkDownloaded *int64) error {
+func chunkSize(c *Chunk) int64 {
+	return c.End - c.Start + 1
+}
+
+func clampChunkProgress(c *Chunk) {
+	size := chunkSize(c)
+	if c.DownloadedBytes < 0 {
+		c.DownloadedBytes = 0
+	}
+	if c.DownloadedBytes > size {
+		c.DownloadedBytes = size
+	}
+	c.Done = c.DownloadedBytes >= size
+}
+
+func downloadChunk(rawURL string, outputPath string, chunk *Chunk, downloaded *int64, chunkDownloaded *int64, manifestMu *sync.Mutex) error {
+	manifestMu.Lock()
+	clampChunkProgress(chunk)
+	currentDownloaded := chunk.DownloadedBytes
+	chunkIsDone := chunk.Done
+	manifestMu.Unlock()
+
+	if chunkIsDone {
+		return nil
+	}
+
+	size := chunkSize(chunk)
+	if size <= 0 {
+		return fmt.Errorf("invalid chunk size for chunk %d", chunk.Index)
+	}
+
+	resumeOffset := chunk.Start + currentDownloaded
+	if resumeOffset > chunk.End {
+		manifestMu.Lock()
+		chunk.Done = true
+		chunk.DownloadedBytes = size
+		manifestMu.Unlock()
+		return nil
+	}
+
+	// Byte-level resume first.
+	startOffset := resumeOffset
+	if err := downloadChunkRange(rawURL, outputPath, chunk, startOffset, downloaded, chunkDownloaded, manifestMu); err == nil {
+		return nil
+	} else {
+		// Fallback to chunk-level resume only for this chunk.
+		fmt.Printf("\nByte resume failed for chunk %d, restarting that chunk.\n", chunk.Index)
+		manifestMu.Lock()
+		chunk.DownloadedBytes = 0
+		chunk.Done = false
+		atomic.StoreInt64(chunkDownloaded, 0)
+		manifestMu.Unlock()
+		return downloadChunkRange(rawURL, outputPath, chunk, chunk.Start, downloaded, chunkDownloaded, manifestMu)
+	}
+}
+
+func downloadChunkRange(rawURL string, outputPath string, chunk *Chunk, startOffset int64, downloaded *int64, chunkDownloaded *int64, manifestMu *sync.Mutex) error {
+	if startOffset < chunk.Start || startOffset > chunk.End {
+		return fmt.Errorf("invalid resume offset %d for chunk %d", startOffset, chunk.Index)
+	}
+
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", chunk.Start, chunk.End))
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", startOffset, chunk.End))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -133,7 +198,7 @@ func downloadChunk(rawURL string, outputPath string, chunk *Chunk, downloaded *i
 	defer file.Close()
 
 	buf := make([]byte, 256*1024)
-	offset := chunk.Start
+	offset := startOffset
 
 	for {
 		n, readErr := resp.Body.Read(buf)
@@ -142,9 +207,16 @@ func downloadChunk(rawURL string, outputPath string, chunk *Chunk, downloaded *i
 			if writeErr != nil {
 				return writeErr
 			}
+			if written < 0 {
+				return fmt.Errorf("negative write length for chunk %d", chunk.Index)
+			}
 			offset += int64(written)
 			atomic.AddInt64(downloaded, int64(written))
 			atomic.AddInt64(chunkDownloaded, int64(written))
+			manifestMu.Lock()
+			chunk.DownloadedBytes += int64(written)
+			clampChunkProgress(chunk)
+			manifestMu.Unlock()
 		}
 
 		if readErr == io.EOF {
@@ -155,18 +227,20 @@ func downloadChunk(rawURL string, outputPath string, chunk *Chunk, downloaded *i
 		}
 	}
 
-	chunk.Done = true
+	manifestMu.Lock()
+	clampChunkProgress(chunk)
+	manifestMu.Unlock()
 	return nil
 }
 
-func downloadChunkWithRetry(rawURL string, outputPath string, chunk *Chunk, downloaded *int64, chunkDownloaded *int64, maxRetries int) error {
+func downloadChunkWithRetry(rawURL string, outputPath string, chunk *Chunk, downloaded *int64, chunkDownloaded *int64, maxRetries int, manifestMu *sync.Mutex) error {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Second)
 		}
 
-		err := downloadChunk(rawURL, outputPath, chunk, downloaded, chunkDownloaded)
+		err := downloadChunk(rawURL, outputPath, chunk, downloaded, chunkDownloaded, manifestMu)
 		if err == nil {
 			return nil
 		}
@@ -304,7 +378,11 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 	resuming := false
 
 	existing, err := loadManifest(mPath)
-	if err == nil && existing.URL == rawURL && existing.TotalSize == totalSize {
+	if err == nil &&
+		existing.URL == rawURL &&
+		existing.OutputPath == outputPath &&
+		existing.TotalSize == totalSize &&
+		existing.Connections == connections {
 		manifest = *existing
 		resuming = true
 	} else {
@@ -339,12 +417,12 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 	var downloaded int64
 	chunkDownloaded := make([]int64, len(chunks))
 	chunkTotals := make([]int64, len(chunks))
+	var manifestMu sync.Mutex
 	for i, c := range chunks {
 		chunkTotals[i] = c.End - c.Start + 1
-		if c.Done {
-			chunkDownloaded[i] = chunkTotals[i]
-			atomic.AddInt64(&downloaded, chunkTotals[i])
-		}
+		clampChunkProgress(&chunks[i])
+		chunkDownloaded[i] = chunks[i].DownloadedBytes
+		atomic.AddInt64(&downloaded, chunks[i].DownloadedBytes)
 	}
 
 	var progressDone chan struct{}
@@ -355,7 +433,37 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 		progressDone, progressFinished = startProgressLoop(&downloaded, totalSize)
 	}
 
-	var manifestMu sync.Mutex
+	stopSaver := make(chan struct{})
+	saverDone := make(chan struct{})
+	go func() {
+		defer close(saverDone)
+		t := time.NewTicker(saveRefreshInterval * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				manifestMu.Lock()
+				saveErr := saveManifest(mPath, &manifest)
+				manifestMu.Unlock()
+				if saveErr != nil {
+					fmt.Printf("\nwarning: manifest save failed: %v\n", saveErr)
+				}
+			case <-stopSaver:
+				return
+			}
+		}
+	}()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		manifestMu.Lock()
+		_ = saveManifest(mPath, &manifest)
+		manifestMu.Unlock()
+		os.Exit(130)
+	}()
+
 	var wg sync.WaitGroup
 	for i := range chunks {
 		if chunks[i].Done {
@@ -366,14 +474,13 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 		chunk := &chunks[i]
 		go func() {
 			defer wg.Done()
-			if err := downloadChunkWithRetry(rawURL, outputPath, chunk, &downloaded, &chunkDownloaded[chunk.Index], maxRetries); err != nil {
+			if err := downloadChunkWithRetry(rawURL, outputPath, chunk, &downloaded, &chunkDownloaded[chunk.Index], maxRetries, &manifestMu); err != nil {
 				errChan <- fmt.Errorf("chunk %d failed: %w", chunk.Index, err)
 				return
 			}
 
 			manifestMu.Lock()
-			manifest.Chunks[chunk.Index].Done = true
-			manifest.Chunks[chunk.Index].Downloaded = chunk.End - chunk.Start + 1
+			clampChunkProgress(&manifest.Chunks[chunk.Index])
 			saveErr := saveManifest(mPath, &manifest)
 			manifestMu.Unlock()
 			if saveErr != nil {
@@ -383,6 +490,8 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 	}
 
 	wg.Wait()
+	close(stopSaver)
+	<-saverDone
 	close(progressDone)
 	<-progressFinished
 	close(errChan)
@@ -396,6 +505,7 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 	if err := os.Remove(mPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	fmt.Println("Download completed successfully.")
 
 	return nil
 }
@@ -543,16 +653,19 @@ func main() {
 		}
 	}
 
-	if size > 0 && rangeSupported {
-		if err := downloadParallel(finalURL, *out, size, *workers, *verbose, *retries); err != nil {
-			fmt.Fprintf(os.Stderr, "error: parallel download failed: %v\n", err)
+	useSingle := size <= 0 || !rangeSupported || *workers <= 1
+	if useSingle {
+		fmt.Println("Mode: single download")
+		if err := downloadSingle(finalURL, *out, size, *verbose); err != nil {
+			fmt.Fprintf(os.Stderr, "error: download failed: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	if err := downloadSingle(finalURL, *out, size, *verbose); err != nil {
-		fmt.Fprintf(os.Stderr, "error: download failed: %v\n", err)
+	fmt.Println("Mode: parallel download")
+	if err := downloadParallel(finalURL, *out, size, *workers, *verbose, *retries); err != nil {
+		fmt.Fprintf(os.Stderr, "error: parallel download failed: %v\n", err)
 		os.Exit(1)
 	}
 }
