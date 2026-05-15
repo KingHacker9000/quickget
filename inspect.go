@@ -28,7 +28,7 @@ func runInspect(rawURL string) error {
 	}
 
 	client := newHTTPClient(1, DefaultForceHTTP1, DefaultMaxIdleConns, DefaultIdleTimeoutSec)
-	info, err := fetchURLInfo(client, validatedURL)
+	info, err := fetchURLInfo(client, validatedURL, nil, DefaultUserAgent)
 	if err != nil {
 		return fmt.Errorf("HEAD request failed: %w", err)
 	}
@@ -46,11 +46,12 @@ func runInspect(rawURL string) error {
 	return nil
 }
 
-func fetchURLInfo(client *http.Client, rawURL string) (URLInfo, error) {
+func fetchURLInfo(client *http.Client, rawURL string, headers http.Header, userAgent string) (URLInfo, error) {
 	req, err := http.NewRequest(http.MethodHead, rawURL, nil)
 	if err != nil {
 		return URLInfo{}, err
 	}
+	applyHeaders(req, headers, userAgent)
 
 	resp, err := client.Do(req)
 	if err != nil {
