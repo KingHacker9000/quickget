@@ -1,0 +1,64 @@
+﻿site_name: FastGet Documentation
+site_description: FastGet (QuickGet CLI) user and contributor documentation.
+site_url: https://kinghacker9000.github.io/quickget/
+repo_url: https://github.com/KingHacker9000/quickget
+repo_name: KingHacker9000/quickget
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - CLI Reference: cli-reference.md
+  - Use Cases: use-cases.md
+  - Deep Dive:
+      - Architecture: deep-dive/architecture.md
+      - Performance Tuning: deep-dive/performance-tuning.md
+      - Resume Manifest: deep-dive/resume-manifest.md
+  - Testing:
+      - User Playbook: testing/playbook.md
+      - Contributor Tests: testing/contributor-tests.md
+  - FAQ and Troubleshooting: faq-troubleshooting.md
+
+validation:
+  omitted_files: warn
+  absolute_links: relative_to_docs
+  unrecognized_links: warn

@@ -1,4 +1,4 @@
-# QuickGet
+﻿# QuickGet
 
 <!-- Replace KingHacker9000 with your GitHub username or org, e.g. ashishajin/quickget -->
 [![CI](https://github.com/KingHacker9000/quickget/actions/workflows/ci.yml/badge.svg)](https://github.com/KingHacker9000/quickget/actions/workflows/ci.yml)
@@ -14,6 +14,12 @@
 Built in Go with parallel range requests, resume-safe manifests, and practical tuning controls for large files.
 
 </div>
+
+## Full Documentation
+
+- GitHub Pages: https://kinghacker9000.github.io/quickget/
+- Local docs source: `docs/`
+
 
 ## Features
 
@@ -180,3 +186,5 @@ python .temp/benchmark.py
 ## License
 
 Licensed under the MIT License. See `LICENSE`.
+
+
