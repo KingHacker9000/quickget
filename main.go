@@ -1,10 +1,12 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +31,12 @@ const (
 	DefaultMinSplitSizeBytes = 8 * 1024 * 1024
 	// DefaultMinDynamicFileSizeBytes is the minimum file size for dynamic splitting.
 	DefaultMinDynamicFileSizeBytes = 64 * 1024 * 1024
+	// DefaultMaxIdleConns is the default maximum number of idle connections across all hosts.
+	DefaultMaxIdleConns = 1024
+	// DefaultIdleTimeoutSec is the default idle connection timeout in seconds.
+	DefaultIdleTimeoutSec = 90
+	// DefaultForceHTTP1 controls whether HTTP/1.1 is forced by default.
+	DefaultForceHTTP1 = false
 	// jsonSaveInterval controls how often the download manifest is saved to disk during the download process.
 	jsonSaveInterval = 1000
 )
@@ -270,7 +278,25 @@ func normalizeChunk(c *Chunk) {
 	}
 }
 
-func downloadSegment(rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64) error {
+func newHTTPClient(connections int, forceHTTP1 bool, maxIdleConns int, idleTimeoutSec int) *http.Client {
+	transport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:   !forceHTTP1,
+		MaxIdleConns:        maxIdleConns,
+		MaxIdleConnsPerHost: connections,
+		MaxConnsPerHost:     connections,
+		IdleConnTimeout:     time.Duration(idleTimeoutSec) * time.Second,
+		DisableCompression:  true,
+	}
+	if forceHTTP1 {
+		transport.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
+	}
+
+	return &http.Client{Transport: transport}
+}
+
+func downloadSegment(client *http.Client, rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64) error {
 	if task.End < task.Start {
 		return fmt.Errorf("invalid range %d-%d", task.Start, task.End)
 	}
@@ -281,7 +307,7 @@ func downloadSegment(rawURL string, outputPath string, task SegmentTask, downloa
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", task.Start, task.End))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -326,13 +352,13 @@ func downloadSegment(rawURL string, outputPath string, task SegmentTask, downloa
 	return nil
 }
 
-func downloadSegmentWithRetry(rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64, maxRetries int) error {
+func downloadSegmentWithRetry(client *http.Client, rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64, maxRetries int) error {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Second)
 		}
-		err := downloadSegment(rawURL, outputPath, task, downloaded, chunkDownloaded)
+		err := downloadSegment(client, rawURL, outputPath, task, downloaded, chunkDownloaded)
 		if err == nil {
 			return nil
 		}
@@ -467,7 +493,7 @@ func startVerboseProgressLoop(downloaded *int64, totalSize int64, chunkTotals []
 	return done, finished
 }
 
-func downloadParallel(rawURL string, outputPath string, totalSize int64, connections int, verbose bool, maxRetries int, dynamic bool, minSplitSize int64, minDynamicFileSize int64) error {
+func downloadParallel(client *http.Client, rawURL string, outputPath string, totalSize int64, connections int, verbose bool, maxRetries int, dynamic bool, minSplitSize int64, minDynamicFileSize int64) error {
 	mPath := manifestPath(outputPath)
 	var manifest DownloadManifest
 
@@ -615,7 +641,7 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 					return
 				}
 
-				if err := downloadSegmentWithRetry(rawURL, outputPath, task, &downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries); err != nil {
+				if err := downloadSegmentWithRetry(client, rawURL, outputPath, task, &downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries); err != nil {
 					errChan <- fmt.Errorf("chunk %d segment %d-%d failed: %w", task.ChunkIndex, task.Start, task.End, err)
 					return
 				}
@@ -657,7 +683,7 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 	return nil
 }
 
-func getFileInfo(rawURL string) (finalURL string, size int64, rangeSupported bool, err error) {
+func getFileInfo(client *http.Client, rawURL string) (finalURL string, size int64, rangeSupported bool, err error) {
 	size = -1
 
 	req, err := http.NewRequest(http.MethodHead, rawURL, nil)
@@ -665,7 +691,7 @@ func getFileInfo(rawURL string) (finalURL string, size int64, rangeSupported boo
 		return "", -1, false, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", -1, false, err
 	}
@@ -686,8 +712,13 @@ func getFileInfo(rawURL string) (finalURL string, size int64, rangeSupported boo
 	return finalURL, size, rangeSupported, nil
 }
 
-func downloadSingle(rawURL string, outputPath string, totalSize int64, verbose bool) error {
-	resp, err := http.Get(rawURL)
+func downloadSingle(client *http.Client, rawURL string, outputPath string, totalSize int64, verbose bool) error {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -739,6 +770,9 @@ func main() {
 	dynamic := flag.Bool("d", DefaultDynamicSplitting, "enable dynamic chunk splitting/work stealing")
 	minSplitSize := flag.Int64("min-split-size", DefaultMinSplitSizeBytes, "minimum range size (bytes) required before dynamic split")
 	minDynamicFileSize := flag.Int64("min-dynamic-file-size", DefaultMinDynamicFileSizeBytes, "minimum file size (bytes) required to enable dynamic splitting")
+	forceHTTP1 := flag.Bool("http1", DefaultForceHTTP1, "disable HTTP/2 and force HTTP/1.1 behavior")
+	maxIdleConns := flag.Int("max-idle-conns", DefaultMaxIdleConns, "max idle connections globally")
+	idleTimeoutSec := flag.Int("idle-timeout", DefaultIdleTimeoutSec, "idle connection timeout in seconds")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options] <url>\n\n", os.Args[0])
 		fmt.Fprintln(flag.CommandLine.Output(), "Options:")
@@ -779,13 +813,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error: -o output filename is required")
 		os.Exit(1)
 	}
+	if *maxIdleConns <= 0 {
+		fmt.Fprintln(os.Stderr, "error: -max-idle-conns must be > 0")
+		os.Exit(1)
+	}
+	if *idleTimeoutSec <= 0 {
+		fmt.Fprintln(os.Stderr, "error: -idle-timeout must be > 0")
+		os.Exit(1)
+	}
+
+	client := newHTTPClient(*workers, *forceHTTP1, *maxIdleConns, *idleTimeoutSec)
 
 	fmt.Println("URL:", parsed.String())
 	fmt.Println("Output:", *out)
 	fmt.Println("Parallel connections:", *workers)
 	fmt.Println("Dynamic splitting:", *dynamic)
 
-	finalURL, size, rangeSupported, err := getFileInfo(parsed.String())
+	finalURL, size, rangeSupported, err := getFileInfo(client, parsed.String())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: HEAD request failed: %v\n", err)
 		os.Exit(1)
@@ -808,7 +852,7 @@ func main() {
 	useSingle := size <= 0 || !rangeSupported || *workers <= 1
 	if useSingle {
 		fmt.Println("Mode: single download")
-		if err := downloadSingle(finalURL, *out, size, *verbose); err != nil {
+		if err := downloadSingle(client, finalURL, *out, size, *verbose); err != nil {
 			fmt.Fprintf(os.Stderr, "error: download failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -816,7 +860,7 @@ func main() {
 	}
 
 	fmt.Println("Mode: parallel download")
-	if err := downloadParallel(finalURL, *out, size, *workers, *verbose, *retries, *dynamic, *minSplitSize, *minDynamicFileSize); err != nil {
+	if err := downloadParallel(client, finalURL, *out, size, *workers, *verbose, *retries, *dynamic, *minSplitSize, *minDynamicFileSize); err != nil {
 		fmt.Fprintf(os.Stderr, "error: parallel download failed: %v\n", err)
 		os.Exit(1)
 	}
