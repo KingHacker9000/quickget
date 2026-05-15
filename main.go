@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,19 +18,33 @@ import (
 	"time"
 )
 
-// Constanst
-// refreshInterval refresh terminal with stats every 200ms
-const refreshInterval = 200
+const (
+	// refreshIntervalMS controls how often the progress display is updated (in milliseconds).
+	refreshIntervalMS = 200
+	// DefaultParallelConnections is the default number of parallel connections to use for downloading.
+	DefaultParallelConnections = 8
+	// DefaultDynamicSplitting is the default value for dynamic splitting.
+	DefaultDynamicSplitting = true
+	// DefaultMinSplitSizeBytes is the minimum size of each split chunk.
+	DefaultMinSplitSizeBytes = 8 * 1024 * 1024
+	// DefaultMinDynamicFileSizeBytes is the minimum file size for dynamic splitting.
+	DefaultMinDynamicFileSizeBytes = 64 * 1024 * 1024
+	// jsonSaveInterval controls how often the download manifest is saved to disk during the download process.
+	jsonSaveInterval = 1000
+)
 
-// saveRefreshInterval saves the manifest to disk every 5000ms (5s)
-const saveRefreshInterval = 5000
+type ByteRange struct {
+	Start int64 `json:"start"`
+	End   int64 `json:"end"`
+}
 
 type Chunk struct {
-	Index           int
-	Start           int64
-	End             int64
-	DownloadedBytes int64
-	Done            bool
+	Index           int         `json:"index"`
+	Start           int64       `json:"start"`
+	End             int64       `json:"end"`
+	DownloadedBytes int64       `json:"downloaded_bytes,omitempty"`
+	Done            bool        `json:"done"`
+	CompletedRanges []ByteRange `json:"completed_ranges"`
 }
 
 type DownloadManifest struct {
@@ -38,6 +53,12 @@ type DownloadManifest struct {
 	TotalSize   int64   `json:"total_size"`
 	Connections int     `json:"connections"`
 	Chunks      []Chunk `json:"chunks"`
+}
+
+type SegmentTask struct {
+	ChunkIndex int
+	Start      int64
+	End        int64
 }
 
 func splitIntoChunks(size int64, connections int) []Chunk {
@@ -57,17 +78,10 @@ func splitIntoChunks(size int64, connections int) []Chunk {
 		}
 
 		end := start + partSize - 1
-		chunks = append(chunks, Chunk{
-			Index:           i,
-			Start:           start,
-			End:             end,
-			DownloadedBytes: 0,
-			Done:            false,
-		})
+		chunks = append(chunks, Chunk{Index: i, Start: start, End: end})
 		start = end + 1
 	}
 
-	// Ensure the final chunk always ends exactly at size-1.
 	if len(chunks) > 0 {
 		chunks[len(chunks)-1].End = size - 1
 	}
@@ -106,7 +120,6 @@ func loadManifest(path string) (*DownloadManifest, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	var m DownloadManifest
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, err
@@ -114,72 +127,159 @@ func loadManifest(path string) (*DownloadManifest, error) {
 	return &m, nil
 }
 
-func chunkSize(c *Chunk) int64 {
+func chunkSize(c Chunk) int64 {
 	return c.End - c.Start + 1
 }
 
-func clampChunkProgress(c *Chunk) {
-	size := chunkSize(c)
-	if c.DownloadedBytes < 0 {
-		c.DownloadedBytes = 0
-	}
-	if c.DownloadedBytes > size {
-		c.DownloadedBytes = size
-	}
-	c.Done = c.DownloadedBytes >= size
-}
-
-func downloadChunk(rawURL string, outputPath string, chunk *Chunk, downloaded *int64, chunkDownloaded *int64, manifestMu *sync.Mutex) error {
-	manifestMu.Lock()
-	clampChunkProgress(chunk)
-	currentDownloaded := chunk.DownloadedBytes
-	chunkIsDone := chunk.Done
-	manifestMu.Unlock()
-
-	if chunkIsDone {
+func mergeRanges(ranges []ByteRange) []ByteRange {
+	if len(ranges) == 0 {
 		return nil
 	}
 
-	size := chunkSize(chunk)
+	filtered := make([]ByteRange, 0, len(ranges))
+	for _, r := range ranges {
+		if r.End >= r.Start {
+			filtered = append(filtered, r)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Start == filtered[j].Start {
+			return filtered[i].End < filtered[j].End
+		}
+		return filtered[i].Start < filtered[j].Start
+	})
+
+	merged := []ByteRange{filtered[0]}
+	for i := 1; i < len(filtered); i++ {
+		cur := filtered[i]
+		last := &merged[len(merged)-1]
+		if cur.Start <= last.End+1 {
+			if cur.End > last.End {
+				last.End = cur.End
+			}
+			continue
+		}
+		merged = append(merged, cur)
+	}
+
+	return merged
+}
+
+func missingRanges(start, end int64, completed []ByteRange) []ByteRange {
+	if end < start {
+		return nil
+	}
+
+	merged := mergeRanges(completed)
+	if len(merged) == 0 {
+		return []ByteRange{{Start: start, End: end}}
+	}
+
+	out := make([]ByteRange, 0)
+	cursor := start
+	for _, r := range merged {
+		if r.End < start || r.Start > end {
+			continue
+		}
+		rs := r.Start
+		re := r.End
+		if rs < start {
+			rs = start
+		}
+		if re > end {
+			re = end
+		}
+		if cursor < rs {
+			out = append(out, ByteRange{Start: cursor, End: rs - 1})
+		}
+		if re+1 > cursor {
+			cursor = re + 1
+		}
+		if cursor > end {
+			break
+		}
+	}
+	if cursor <= end {
+		out = append(out, ByteRange{Start: cursor, End: end})
+	}
+
+	return out
+}
+
+func rangesCover(start, end int64, completed []ByteRange) bool {
+	return len(missingRanges(start, end, completed)) == 0
+}
+
+func normalizeChunk(c *Chunk) {
+	size := chunkSize(*c)
 	if size <= 0 {
-		return fmt.Errorf("invalid chunk size for chunk %d", chunk.Index)
+		c.CompletedRanges = nil
+		c.DownloadedBytes = 0
+		c.Done = true
+		return
 	}
 
-	resumeOffset := chunk.Start + currentDownloaded
-	if resumeOffset > chunk.End {
-		manifestMu.Lock()
-		chunk.Done = true
-		chunk.DownloadedBytes = size
-		manifestMu.Unlock()
-		return nil
+	if len(c.CompletedRanges) == 0 && c.DownloadedBytes > 0 {
+		end := c.Start + c.DownloadedBytes - 1
+		if end > c.End {
+			end = c.End
+		}
+		if end >= c.Start {
+			c.CompletedRanges = []ByteRange{{Start: c.Start, End: end}}
+		}
 	}
 
-	// Byte-level resume first.
-	startOffset := resumeOffset
-	if err := downloadChunkRange(rawURL, outputPath, chunk, startOffset, downloaded, chunkDownloaded, manifestMu); err == nil {
-		return nil
-	} else {
-		// Fallback to chunk-level resume only for this chunk.
-		fmt.Printf("\nByte resume failed for chunk %d, restarting that chunk.\n", chunk.Index)
-		manifestMu.Lock()
-		chunk.DownloadedBytes = 0
-		chunk.Done = false
-		atomic.StoreInt64(chunkDownloaded, 0)
-		manifestMu.Unlock()
-		return downloadChunkRange(rawURL, outputPath, chunk, chunk.Start, downloaded, chunkDownloaded, manifestMu)
+	clamped := make([]ByteRange, 0, len(c.CompletedRanges))
+	for _, r := range c.CompletedRanges {
+		rs := r.Start
+		re := r.End
+		if re < c.Start || rs > c.End {
+			continue
+		}
+		if rs < c.Start {
+			rs = c.Start
+		}
+		if re > c.End {
+			re = c.End
+		}
+		if re >= rs {
+			clamped = append(clamped, ByteRange{Start: rs, End: re})
+		}
+	}
+
+	c.CompletedRanges = mergeRanges(clamped)
+	c.Done = rangesCover(c.Start, c.End, c.CompletedRanges)
+
+	total := int64(0)
+	for _, r := range c.CompletedRanges {
+		total += r.End - r.Start + 1
+	}
+	if total < 0 {
+		total = 0
+	}
+	if total > size {
+		total = size
+	}
+	c.DownloadedBytes = total
+	if total == size {
+		c.Done = true
 	}
 }
 
-func downloadChunkRange(rawURL string, outputPath string, chunk *Chunk, startOffset int64, downloaded *int64, chunkDownloaded *int64, manifestMu *sync.Mutex) error {
-	if startOffset < chunk.Start || startOffset > chunk.End {
-		return fmt.Errorf("invalid resume offset %d for chunk %d", startOffset, chunk.Index)
+func downloadSegment(rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64) error {
+	if task.End < task.Start {
+		return fmt.Errorf("invalid range %d-%d", task.Start, task.End)
 	}
 
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", startOffset, chunk.End))
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", task.Start, task.End))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -198,7 +298,7 @@ func downloadChunkRange(rawURL string, outputPath string, chunk *Chunk, startOff
 	defer file.Close()
 
 	buf := make([]byte, 256*1024)
-	offset := startOffset
+	offset := task.Start
 
 	for {
 		n, readErr := resp.Body.Read(buf)
@@ -207,16 +307,12 @@ func downloadChunkRange(rawURL string, outputPath string, chunk *Chunk, startOff
 			if writeErr != nil {
 				return writeErr
 			}
-			if written < 0 {
-				return fmt.Errorf("negative write length for chunk %d", chunk.Index)
+			if written <= 0 {
+				return fmt.Errorf("invalid write length")
 			}
 			offset += int64(written)
 			atomic.AddInt64(downloaded, int64(written))
 			atomic.AddInt64(chunkDownloaded, int64(written))
-			manifestMu.Lock()
-			chunk.DownloadedBytes += int64(written)
-			clampChunkProgress(chunk)
-			manifestMu.Unlock()
 		}
 
 		if readErr == io.EOF {
@@ -227,20 +323,16 @@ func downloadChunkRange(rawURL string, outputPath string, chunk *Chunk, startOff
 		}
 	}
 
-	manifestMu.Lock()
-	clampChunkProgress(chunk)
-	manifestMu.Unlock()
 	return nil
 }
 
-func downloadChunkWithRetry(rawURL string, outputPath string, chunk *Chunk, downloaded *int64, chunkDownloaded *int64, maxRetries int, manifestMu *sync.Mutex) error {
+func downloadSegmentWithRetry(rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64, maxRetries int) error {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Second)
 		}
-
-		err := downloadChunk(rawURL, outputPath, chunk, downloaded, chunkDownloaded, manifestMu)
+		err := downloadSegment(rawURL, outputPath, task, downloaded, chunkDownloaded)
 		if err == nil {
 			return nil
 		}
@@ -285,7 +377,7 @@ func startProgressLoop(downloaded *int64, totalSize int64) (chan struct{}, chan 
 	start := time.Now()
 	go func() {
 		defer close(finished)
-		ticker := time.NewTicker(refreshInterval * time.Millisecond)
+		ticker := time.NewTicker(refreshIntervalMS * time.Millisecond)
 		defer ticker.Stop()
 
 		for {
@@ -311,7 +403,7 @@ func startVerboseProgressLoop(downloaded *int64, totalSize int64, chunkTotals []
 
 	go func() {
 		defer close(finished)
-		ticker := time.NewTicker(refreshInterval * time.Millisecond)
+		ticker := time.NewTicker(refreshIntervalMS * time.Millisecond)
 		defer ticker.Stop()
 		lines := len(chunkTotals) + 1
 		firstRender := true
@@ -336,7 +428,10 @@ func startVerboseProgressLoop(downloaded *int64, totalSize int64, chunkTotals []
 
 			for i := range chunkTotals {
 				chunkVal := atomic.LoadInt64(&chunkDownloaded[i])
-				percent := float64(chunkVal) / float64(chunkTotals[i]) * 100
+				percent := 0.0
+				if chunkTotals[i] > 0 {
+					percent = float64(chunkVal) / float64(chunkTotals[i]) * 100
+				}
 				if percent > 100 {
 					percent = 100
 				}
@@ -372,10 +467,9 @@ func startVerboseProgressLoop(downloaded *int64, totalSize int64, chunkTotals []
 	return done, finished
 }
 
-func downloadParallel(rawURL string, outputPath string, totalSize int64, connections int, verbose bool, maxRetries int) error {
+func downloadParallel(rawURL string, outputPath string, totalSize int64, connections int, verbose bool, maxRetries int, dynamic bool, minSplitSize int64, minDynamicFileSize int64) error {
 	mPath := manifestPath(outputPath)
 	var manifest DownloadManifest
-	resuming := false
 
 	existing, err := loadManifest(mPath)
 	if err == nil &&
@@ -384,22 +478,12 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 		existing.TotalSize == totalSize &&
 		existing.Connections == connections {
 		manifest = *existing
-		resuming = true
 	} else {
 		chunks := splitIntoChunks(totalSize, connections)
 		if len(chunks) == 0 {
 			return fmt.Errorf("cannot split file into chunks")
 		}
-		manifest = DownloadManifest{
-			URL:         rawURL,
-			OutputPath:  outputPath,
-			TotalSize:   totalSize,
-			Connections: connections,
-			Chunks:      chunks,
-		}
-	}
-
-	if !resuming {
+		manifest = DownloadManifest{URL: rawURL, OutputPath: outputPath, TotalSize: totalSize, Connections: connections, Chunks: chunks}
 		if err := preallocateFile(outputPath, totalSize); err != nil {
 			return err
 		}
@@ -408,21 +492,34 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 		}
 	}
 
-	chunks := manifest.Chunks
-	if len(chunks) == 0 {
-		return fmt.Errorf("cannot split file into chunks")
+	if dynamic && totalSize < minDynamicFileSize {
+		fmt.Printf("Dynamic splitting disabled for this file size (size=%d, min=%d).\n", totalSize, minDynamicFileSize)
+		dynamic = false
 	}
 
-	errChan := make(chan error, len(chunks))
-	var downloaded int64
-	chunkDownloaded := make([]int64, len(chunks))
-	chunkTotals := make([]int64, len(chunks))
+	for i := range manifest.Chunks {
+		normalizeChunk(&manifest.Chunks[i])
+	}
+
 	var manifestMu sync.Mutex
-	for i, c := range chunks {
-		chunkTotals[i] = c.End - c.Start + 1
-		clampChunkProgress(&chunks[i])
-		chunkDownloaded[i] = chunks[i].DownloadedBytes
-		atomic.AddInt64(&downloaded, chunks[i].DownloadedBytes)
+	remaining := make(map[int][]ByteRange)
+	for i, c := range manifest.Chunks {
+		if c.Done {
+			continue
+		}
+		missing := missingRanges(c.Start, c.End, c.CompletedRanges)
+		if len(missing) > 0 {
+			remaining[i] = missing
+		}
+	}
+
+	var downloaded int64
+	chunkDownloaded := make([]int64, len(manifest.Chunks))
+	chunkTotals := make([]int64, len(manifest.Chunks))
+	for i, c := range manifest.Chunks {
+		chunkDownloaded[i] = c.DownloadedBytes
+		chunkTotals[i] = chunkSize(c)
+		atomic.AddInt64(&downloaded, c.DownloadedBytes)
 	}
 
 	var progressDone chan struct{}
@@ -437,16 +534,16 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 	saverDone := make(chan struct{})
 	go func() {
 		defer close(saverDone)
-		t := time.NewTicker(saveRefreshInterval * time.Millisecond)
+		t := time.NewTicker(jsonSaveInterval * time.Millisecond)
 		defer t.Stop()
 		for {
 			select {
 			case <-t.C:
 				manifestMu.Lock()
-				saveErr := saveManifest(mPath, &manifest)
+				err := saveManifest(mPath, &manifest)
 				manifestMu.Unlock()
-				if saveErr != nil {
-					fmt.Printf("\nwarning: manifest save failed: %v\n", saveErr)
+				if err != nil {
+					fmt.Printf("\nwarning: manifest save failed: %v\n", err)
 				}
 			case <-stopSaver:
 				return
@@ -464,27 +561,75 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 		os.Exit(130)
 	}()
 
-	var wg sync.WaitGroup
-	for i := range chunks {
-		if chunks[i].Done {
-			continue
+	pickTask := func() (SegmentTask, bool) {
+		manifestMu.Lock()
+		defer manifestMu.Unlock()
+
+		maxChunk := -1
+		maxRangeIdx := -1
+		maxLen := int64(0)
+		var maxRange ByteRange
+
+		for ci, ranges := range remaining {
+			for ri, r := range ranges {
+				l := r.End - r.Start + 1
+				if l > maxLen {
+					maxLen = l
+					maxChunk = ci
+					maxRangeIdx = ri
+					maxRange = r
+				}
+			}
 		}
 
+		if maxChunk == -1 {
+			return SegmentTask{}, false
+		}
+
+		assign := maxRange
+		if dynamic && maxLen >= minSplitSize*2 {
+			assignSize := maxLen / 2
+			assign = ByteRange{Start: maxRange.Start, End: maxRange.Start + assignSize - 1}
+			remaining[maxChunk][maxRangeIdx].Start = assign.End + 1
+		} else {
+			last := len(remaining[maxChunk]) - 1
+			remaining[maxChunk][maxRangeIdx] = remaining[maxChunk][last]
+			remaining[maxChunk] = remaining[maxChunk][:last]
+			if len(remaining[maxChunk]) == 0 {
+				delete(remaining, maxChunk)
+			}
+		}
+
+		return SegmentTask{ChunkIndex: maxChunk, Start: assign.Start, End: assign.End}, true
+	}
+
+	errChan := make(chan error, connections)
+	var wg sync.WaitGroup
+	for i := 0; i < connections; i++ {
 		wg.Add(1)
-		chunk := &chunks[i]
 		go func() {
 			defer wg.Done()
-			if err := downloadChunkWithRetry(rawURL, outputPath, chunk, &downloaded, &chunkDownloaded[chunk.Index], maxRetries, &manifestMu); err != nil {
-				errChan <- fmt.Errorf("chunk %d failed: %w", chunk.Index, err)
-				return
-			}
+			for {
+				task, ok := pickTask()
+				if !ok {
+					return
+				}
 
-			manifestMu.Lock()
-			clampChunkProgress(&manifest.Chunks[chunk.Index])
-			saveErr := saveManifest(mPath, &manifest)
-			manifestMu.Unlock()
-			if saveErr != nil {
-				errChan <- fmt.Errorf("chunk %d manifest save failed: %w", chunk.Index, saveErr)
+				if err := downloadSegmentWithRetry(rawURL, outputPath, task, &downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries); err != nil {
+					errChan <- fmt.Errorf("chunk %d segment %d-%d failed: %w", task.ChunkIndex, task.Start, task.End, err)
+					return
+				}
+
+				manifestMu.Lock()
+				c := &manifest.Chunks[task.ChunkIndex]
+				c.CompletedRanges = append(c.CompletedRanges, ByteRange{Start: task.Start, End: task.End})
+				normalizeChunk(c)
+				saveErr := saveManifest(mPath, &manifest)
+				manifestMu.Unlock()
+				if saveErr != nil {
+					errChan <- fmt.Errorf("chunk %d manifest save failed: %w", task.ChunkIndex, saveErr)
+					return
+				}
 			}
 		}()
 	}
@@ -502,18 +647,17 @@ func downloadParallel(rawURL string, outputPath string, totalSize int64, connect
 		}
 	}
 
+	manifestMu.Lock()
+	_ = saveManifest(mPath, &manifest)
+	manifestMu.Unlock()
 	if err := os.Remove(mPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	fmt.Println("Download completed successfully.")
-
 	return nil
 }
 
-// getFileInfo performs a HEAD request to the given URL and returns the final URL after redirects,
-// the content length (or -1 if not available), whether byte-range requests are supported, and any error encountered.
 func getFileInfo(rawURL string) (finalURL string, size int64, rangeSupported bool, err error) {
-
 	size = -1
 
 	req, err := http.NewRequest(http.MethodHead, rawURL, nil)
@@ -567,7 +711,6 @@ func downloadSingle(rawURL string, outputPath string, totalSize int64, verbose b
 	}()
 
 	buf := make([]byte, 32*1024)
-
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
@@ -577,7 +720,6 @@ func downloadSingle(rawURL string, outputPath string, totalSize int64, verbose b
 			}
 			atomic.AddInt64(&downloaded, int64(written))
 		}
-
 		if readErr == io.EOF {
 			break
 		}
@@ -591,9 +733,12 @@ func downloadSingle(rawURL string, outputPath string, totalSize int64, verbose b
 
 func main() {
 	out := flag.String("o", "", "output filename")
-	workers := flag.Int("n", 8, "number of parallel connections")
+	workers := flag.Int("n", DefaultParallelConnections, "number of parallel connections")
 	retries := flag.Int("retries", 3, "max retries per chunk")
 	verbose := flag.Bool("v", false, "verbose progress output (includes per-chunk status)")
+	dynamic := flag.Bool("d", DefaultDynamicSplitting, "enable dynamic chunk splitting/work stealing")
+	minSplitSize := flag.Int64("min-split-size", DefaultMinSplitSizeBytes, "minimum range size (bytes) required before dynamic split")
+	minDynamicFileSize := flag.Int64("min-dynamic-file-size", DefaultMinDynamicFileSizeBytes, "minimum file size (bytes) required to enable dynamic splitting")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options] <url>\n\n", os.Args[0])
 		fmt.Fprintln(flag.CommandLine.Output(), "Options:")
@@ -614,7 +759,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: invalid URL: %q\n", rawURL)
 		os.Exit(1)
 	}
-
 	if *workers <= 0 {
 		fmt.Fprintln(os.Stderr, "error: -n must be greater than 0")
 		os.Exit(1)
@@ -623,7 +767,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error: -retries must be >= 0")
 		os.Exit(1)
 	}
-
+	if *minSplitSize <= 0 {
+		fmt.Fprintln(os.Stderr, "error: -min-split-size must be > 0")
+		os.Exit(1)
+	}
+	if *minDynamicFileSize <= 0 {
+		fmt.Fprintln(os.Stderr, "error: -min-dynamic-file-size must be > 0")
+		os.Exit(1)
+	}
 	if *out == "" {
 		fmt.Fprintln(os.Stderr, "error: -o output filename is required")
 		os.Exit(1)
@@ -632,6 +783,7 @@ func main() {
 	fmt.Println("URL:", parsed.String())
 	fmt.Println("Output:", *out)
 	fmt.Println("Parallel connections:", *workers)
+	fmt.Println("Dynamic splitting:", *dynamic)
 
 	finalURL, size, rangeSupported, err := getFileInfo(parsed.String())
 	if err != nil {
@@ -664,7 +816,7 @@ func main() {
 	}
 
 	fmt.Println("Mode: parallel download")
-	if err := downloadParallel(finalURL, *out, size, *workers, *verbose, *retries); err != nil {
+	if err := downloadParallel(finalURL, *out, size, *workers, *verbose, *retries, *dynamic, *minSplitSize, *minDynamicFileSize); err != nil {
 		fmt.Fprintf(os.Stderr, "error: parallel download failed: %v\n", err)
 		os.Exit(1)
 	}
