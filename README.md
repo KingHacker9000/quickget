@@ -1,4 +1,4 @@
-ï»¿# FastGet
+# QuickGet
 
 <p align="center">
   <strong>High-speed, resumable, multi-connection downloader for the command line.</strong><br/>
@@ -6,21 +6,21 @@
 </p>
 
 <p align="center">
-  <code>Parallel ranges</code> â€¢ <code>Resume-safe manifests</code> â€¢ <code>Dynamic splitting</code> â€¢ <code>Disk-aware buffering</code>
+  <code>Parallel ranges</code> • <code>Resume-safe manifests</code> • <code>Dynamic splitting</code> • <code>Disk-aware buffering</code>
 </p>
 
 ---
 
-## Why FastGet
+## Why QuickGet
 
-FastGet is designed for one job: pull large files quickly without losing progress.
+QuickGet is designed for one job: pull large files quickly without losing progress.
 
 It combines parallel HTTP range downloads, resume metadata, and practical transport tuning so interrupted downloads can continue safely and efficiently.
 
 ## Highlights
 
 - Parallel segmented downloading with HTTP range requests
-- Resume support via `<output>.fastget.json` manifest files
+- Resume support via `<output>.quickget.json` manifest files
 - Dynamic work stealing / chunk splitting for better worker utilization
 - Queue mode for fixed-size segment scheduling
 - Custom request headers with repeatable `-H` flags
@@ -35,39 +35,76 @@ It combines parallel HTTP range downloads, resume metadata, and practical transp
 ### Build from source
 
 ```bash
-go build -o fastget.exe
+go build -o quickget.exe ./cmd/quickget
 ```
 
 ### Optional: run without building
 
 ```bash
-go run . --help
+go run ./cmd/quickget --help
 ```
 
 ## Quick Start
 
 ```bash
 # Basic download (auto filename, Downloads directory)
-fastget.exe download https://example.com/big.iso
+quickget.exe download https://example.com/big.iso
 
 # Pick filename and worker count
-fastget.exe download -o big.iso -n 12 https://example.com/big.iso
+quickget.exe download -o big.iso -n 12 https://example.com/big.iso
 
 # Legacy form (same as `download` command)
-fastget.exe -o big.iso -retries 5 https://example.com/big.iso
+quickget.exe -o big.iso -retries 5 https://example.com/big.iso
 ```
 
 ## Commands
 
 ```text
-fastget.exe download [options] <url>
-fastget.exe inspect <url>
-fastget.exe server-test <url>
-fastget.exe status <output-file>
-fastget.exe clean <output-file>
-fastget.exe hash <file>
-fastget.exe disk-test -o <temp-test-file>
-fastget.exe tune-disk -o <temp-test-file>
+quickget.exe download [options] <url>
+quickget.exe inspect <url>
+quickget.exe server-test <url>
+quickget.exe status <output-file>
+quickget.exe clean <output-file>
+quickget.exe hash <file>
+quickget.exe disk-test -o <temp-test-file>
+quickget.exe tune-disk -o <temp-test-file>
+```
+
+## Project Structure
+
+```text
+cmd/quickget/           # executable entrypoint
+pkg/quickget/cli/       # command parsing and terminal output
+pkg/quickget/core/      # downloader engine and orchestration
+pkg/quickget/manifest/  # resume-manifest data model and helpers
+pkg/quickget/probe/     # inspect/server capability probing
+pkg/quickget/tune/      # disk buffer tuning
+pkg/quickget/hash/      # file hashing helpers
+pkg/quickget/           # library facade for embedding in other Go projects
+```
+
+## GUI/Submodule Integration (Go)
+
+QuickGet can be consumed directly as a Go module from a GUI project:
+
+```go
+import (
+    "context"
+    "quickget/pkg/quickget"
+    "quickget/pkg/quickget/core"
+)
+
+opts := core.DefaultRequest()
+opts.URL = "https://example.com/file.iso"
+opts.OutputDir = "downloads"
+opts.Workers = 8
+
+_, err := quickget.Download(context.Background(), quickget.DownloadRequest{
+    Options: opts,
+})
+if err != nil {
+    // handle error
+}
 ```
 
 ## Download Options
@@ -90,18 +127,18 @@ fastget.exe tune-disk -o <temp-test-file>
 | `-max-idle-conns int` | Global max idle HTTP connections | `1024` |
 | `-idle-timeout int` | Idle connection timeout (seconds) | `90` |
 | `-write-disk string` | Only measure write stats for this disk/volume (example: `C:`) | empty |
-| `-user-agent string` | User-Agent header value | `FastGet/1.0` |
+| `-user-agent string` | User-Agent header value | `QuickGet/1.0` |
 | `-H value` | Custom HTTP header, repeatable (example: `-H "Authorization: Bearer TOKEN"`) | none |
 
-FastGet accepts download flags before or after the URL; argument order is normalized internally.
+QuickGet accepts download flags before or after the URL; argument order is normalized internally.
 
 ## Command Behavior
 
 - `inspect <url>`: Sends a HEAD request and reports final URL, status, content length, and range support.
 - `server-test <url>`: Runs HTTP capability checks against the target server.
-- `status <output-file>`: Reads `<output-file>.fastget.json`, prints a summary, then raw manifest JSON.
+- `status <output-file>`: Reads `<output-file>.quickget.json`, prints a summary, then raw manifest JSON.
 - `clean <output-file>`:
-  - Deletes `<output-file>.fastget.json`.
+  - Deletes `<output-file>.quickget.json`.
   - Deletes `<output-file>` only if manifest indicates incomplete download.
   - Leaves output file untouched when no manifest exists.
 - `hash <file>`: Prints SHA-256 as `<hex>  <file>`.
@@ -109,33 +146,33 @@ FastGet accepts download flags before or after the URL; argument order is normal
 
 ## Resume Model
 
-FastGet stores progress in two files:
+QuickGet stores progress in two files:
 
 ```text
 <output file>
-<output file>.fastget.json
+<output file>.quickget.json
 ```
 
-If interrupted, rerun the same command to continue. Remove the `.fastget.json` file to reset state.
+If interrupted, rerun the same command to continue. Remove the `.quickget.json` file to reset state.
 
 ## Practical Recipes
 
 ```bash
 # High-throughput dynamic mode
-fastget.exe download -o sample.dat -n 16 -d https://proof.ovh.net/files/1Gb.dat
+quickget.exe download -o sample.dat -n 16 -d https://proof.ovh.net/files/1Gb.dat
 
 # Queue-mode download with larger segment size
-fastget.exe download -o sample.dat -n 12 -queue-mode -segment-size 33554432 https://proof.ovh.net/files/1Gb.dat
+quickget.exe download -o sample.dat -n 12 -queue-mode -segment-size 33554432 https://proof.ovh.net/files/1Gb.dat
 
 # Auto-tune buffer and run with verbose output
-fastget.exe download -o sample.dat -n 8 -auto-buffer -v https://proof.ovh.net/files/1Gb.dat
+quickget.exe download -o sample.dat -n 8 -auto-buffer -v https://proof.ovh.net/files/1Gb.dat
 
 # Send custom User-Agent and custom headers
-fastget.exe download -o private.bin -user-agent "Mozilla/5.0 FastGet" -H "Authorization: Bearer TOKEN" -H "X-Client: FastGet" https://example.com/private.bin
+quickget.exe download -o private.bin -user-agent "Mozilla/5.0 QuickGet" -H "Authorization: Bearer TOKEN" -H "X-Client: QuickGet" https://example.com/private.bin
 
 # Verify server and inspect metadata first
-fastget.exe server-test https://proof.ovh.net/files/1Gb.dat
-fastget.exe inspect https://proof.ovh.net/files/1Gb.dat
+quickget.exe server-test https://proof.ovh.net/files/1Gb.dat
+quickget.exe inspect https://proof.ovh.net/files/1Gb.dat
 ```
 
 ## Benchmarking
@@ -151,9 +188,9 @@ python .temp/benchmark.py
 ## Notes
 
 - Parallel mode requires server range support and known file size.
-- When range support is unavailable, FastGet falls back to single-stream mode automatically.
+- When range support is unavailable, QuickGet falls back to single-stream mode automatically.
 - `-http1` defaults to `true` in current builds.
-- If `User-Agent` is not provided in headers, FastGet applies `-user-agent` automatically.
+- If `User-Agent` is not provided in headers, QuickGet applies `-user-agent` automatically.
 
 ---
 

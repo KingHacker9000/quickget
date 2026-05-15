@@ -1,8 +1,7 @@
-package main
+package tune
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,11 +9,11 @@ import (
 	"time"
 )
 
-var diskTestBufferSizes = []int{64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024, 2 * 1024 * 1024}
+var DiskTestBufferSizes = []int{64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024, 2 * 1024 * 1024}
 
 const (
-	diskTestFileSizeBytes = int64(256 * 1024 * 1024)
-	diskTestRepeats       = 3
+	DiskTestFileSizeBytes = int64(256 * 1024 * 1024)
+	DiskTestRepeats       = 3
 )
 
 type DiskTestResult struct {
@@ -23,49 +22,15 @@ type DiskTestResult struct {
 	AvgWriteLatency time.Duration
 }
 
-func runDiskTestCommand(args []string) error {
-	fs := flag.NewFlagSet("disk-test", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	output := fs.String("o", "", "temp output test file path")
-	fs.Usage = func() {
-		name := filepath.Base(os.Args[0])
-		fmt.Fprintf(os.Stderr, "Usage: %s disk-test -o <temp-test-file>\n", name)
-	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if *output == "" {
-		fs.Usage()
-		return errors.New("-o is required")
-	}
-	return runAndPrintDiskTest(*output)
-}
-
-func runAndPrintDiskTest(outputPath string) error {
-	fmt.Printf("Testing disk write performance at: %s\n", filepath.Dir(outputPath))
-	fmt.Printf("Running %d passes per buffer size (test file: %dMB)\n", diskTestRepeats, diskTestFileSizeBytes/1024/1024)
-	results, recommended, err := RunDiskBufferTest(outputPath)
-	if err != nil {
-		return err
-	}
-	for _, r := range results {
-		fmt.Printf("%-6s %7.0f MB/s   avg write %.2fms\n", formatBytesBinary(r.BufferSize), r.ThroughputMBps, float64(r.AvgWriteLatency.Microseconds())/1000.0)
-	}
-	fmt.Println()
-	fmt.Printf("Recommended buffer size: %s\n", formatBytesBinary(recommended.BufferSize))
-	fmt.Println("Reason: best stable throughput with low write latency")
-	return nil
-}
-
 func RecommendBufferSizeForPath(outputPath string) (DiskTestResult, error) {
 	_, recommended, err := RunDiskBufferTest(outputPath)
 	return recommended, err
 }
 
 func RunDiskBufferTest(outputPath string) ([]DiskTestResult, DiskTestResult, error) {
-	results := make([]DiskTestResult, 0, len(diskTestBufferSizes))
+	results := make([]DiskTestResult, 0, len(DiskTestBufferSizes))
 	bestThroughput := 0.0
-	for _, sz := range diskTestBufferSizes {
+	for _, sz := range DiskTestBufferSizes {
 		r, err := measureDiskBufferRobust(outputPath, sz)
 		if err != nil {
 			return nil, DiskTestResult{}, err
@@ -90,9 +55,9 @@ func RunDiskBufferTest(outputPath string) ([]DiskTestResult, DiskTestResult, err
 }
 
 func measureDiskBufferRobust(outputPath string, bufferSize int) (DiskTestResult, error) {
-	throughputs := make([]float64, 0, diskTestRepeats)
-	latencies := make([]time.Duration, 0, diskTestRepeats)
-	for i := 0; i < diskTestRepeats; i++ {
+	throughputs := make([]float64, 0, DiskTestRepeats)
+	latencies := make([]time.Duration, 0, DiskTestRepeats)
+	for i := 0; i < DiskTestRepeats; i++ {
 		runPath := fmt.Sprintf("%s.%d.tmp", outputPath, i)
 		r, err := measureDiskBuffer(runPath, bufferSize)
 		if err != nil {
@@ -122,7 +87,7 @@ func measureDiskBuffer(outputPath string, bufferSize int) (DiskTestResult, error
 		_ = os.Remove(outputPath)
 	}()
 
-	totalBytes := diskTestFileSizeBytes
+	totalBytes := DiskTestFileSizeBytes
 	buf := make([]byte, bufferSize)
 	remaining := totalBytes
 	var writeCount int64
@@ -178,7 +143,7 @@ func medianDuration(v []time.Duration) time.Duration {
 	return (cp[mid-1] + cp[mid]) / 2
 }
 
-func formatBytesBinary(n int) string {
+func FormatBytesBinary(n int) string {
 	if n%(1024*1024) == 0 {
 		return fmt.Sprintf("%dMB", n/(1024*1024))
 	}

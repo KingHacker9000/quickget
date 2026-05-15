@@ -1,3 +1,3 @@
-module fastget
+module quickget
 
 go 1.22

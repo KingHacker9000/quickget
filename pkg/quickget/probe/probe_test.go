@@ -1,10 +1,21 @@
-package main
+package probe
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+func testApplyHeaders(req *http.Request, headers http.Header, userAgent string) {
+	for key, values := range headers {
+		for _, v := range values {
+			req.Header.Add(key, v)
+		}
+	}
+	if req.Header.Get("User-Agent") == "" && userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
+}
 
 func TestFetchRemoteFileStats_ContentLengthValid(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -16,7 +27,7 @@ func TestFetchRemoteFileStats_ContentLengthValid(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent)
+	stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
 	if err != nil {
 		t.Fatalf("FetchRemoteFileStats returned error: %v", err)
 	}
@@ -31,7 +42,7 @@ func TestFetchRemoteFileStats_ContentLengthMissingIsUnknown(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent)
+	stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
 	if err != nil {
 		t.Fatalf("FetchRemoteFileStats returned error: %v", err)
 	}
@@ -54,7 +65,7 @@ func TestFetchRemoteFileStats_AcceptRangesBytesIsSupported(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent)
+	stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
 	if err != nil {
 		t.Fatalf("FetchRemoteFileStats returned error: %v", err)
 	}
@@ -82,7 +93,7 @@ func TestFetchRemoteFileStats_AcceptRangesOtherOrMissingIsUnsupported(t *testing
 			}))
 			defer srv.Close()
 
-			stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent)
+			stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
 			if err != nil {
 				t.Fatalf("FetchRemoteFileStats returned error: %v", err)
 			}

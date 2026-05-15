@@ -1,8 +1,7 @@
-package main
+package manifest
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"sort"
 )
@@ -37,19 +36,19 @@ type SegmentTask struct {
 	End        int64
 }
 
-func manifestPath(outputPath string) string {
-	return outputPath + ".fastget.json"
+func Path(outputPath string) string {
+	return outputPath + ".quickget.json"
 }
 
-func saveManifest(path string, manifest *DownloadManifest) error {
-	b, err := json.MarshalIndent(manifest, "", "  ")
+func Save(path string, m *DownloadManifest) error {
+	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, b, 0644)
 }
 
-func loadManifest(path string) (*DownloadManifest, error) {
+func Load(path string) (*DownloadManifest, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -61,11 +60,11 @@ func loadManifest(path string) (*DownloadManifest, error) {
 	return &m, nil
 }
 
-func chunkSize(c Chunk) int64 {
+func ChunkSize(c Chunk) int64 {
 	return c.End - c.Start + 1
 }
 
-func mergeRanges(ranges []ByteRange) []ByteRange {
+func MergeRanges(ranges []ByteRange) []ByteRange {
 	if len(ranges) == 0 {
 		return nil
 	}
@@ -103,12 +102,12 @@ func mergeRanges(ranges []ByteRange) []ByteRange {
 	return merged
 }
 
-func missingRanges(start, end int64, completed []ByteRange) []ByteRange {
+func MissingRanges(start, end int64, completed []ByteRange) []ByteRange {
 	if end < start {
 		return nil
 	}
 
-	merged := mergeRanges(completed)
+	merged := MergeRanges(completed)
 	if len(merged) == 0 {
 		return []ByteRange{{Start: start, End: end}}
 	}
@@ -144,12 +143,12 @@ func missingRanges(start, end int64, completed []ByteRange) []ByteRange {
 	return out
 }
 
-func rangesCover(start, end int64, completed []ByteRange) bool {
-	return len(missingRanges(start, end, completed)) == 0
+func RangesCover(start, end int64, completed []ByteRange) bool {
+	return len(MissingRanges(start, end, completed)) == 0
 }
 
-func normalizeChunk(c *Chunk) {
-	size := chunkSize(*c)
+func NormalizeChunk(c *Chunk) {
+	size := ChunkSize(*c)
 	if size <= 0 {
 		c.CompletedRanges = nil
 		c.DownloadedBytes = 0
@@ -185,8 +184,8 @@ func normalizeChunk(c *Chunk) {
 		}
 	}
 
-	c.CompletedRanges = mergeRanges(clamped)
-	c.Done = rangesCover(c.Start, c.End, c.CompletedRanges)
+	c.CompletedRanges = MergeRanges(clamped)
+	c.Done = RangesCover(c.Start, c.End, c.CompletedRanges)
 
 	total := int64(0)
 	for _, r := range c.CompletedRanges {
@@ -204,12 +203,12 @@ func normalizeChunk(c *Chunk) {
 	}
 }
 
-func manifestTotals(manifest *DownloadManifest) (downloaded int64, total int64, doneChunks int) {
-	for i := range manifest.Chunks {
-		normalizeChunk(&manifest.Chunks[i])
-		c := manifest.Chunks[i]
+func Totals(m *DownloadManifest) (downloaded int64, total int64, doneChunks int) {
+	for i := range m.Chunks {
+		NormalizeChunk(&m.Chunks[i])
+		c := m.Chunks[i]
 		downloaded += c.DownloadedBytes
-		total += chunkSize(c)
+		total += ChunkSize(c)
 		if c.Done {
 			doneChunks++
 		}
@@ -217,91 +216,10 @@ func manifestTotals(manifest *DownloadManifest) (downloaded int64, total int64, 
 	return downloaded, total, doneChunks
 }
 
-func manifestComplete(manifest *DownloadManifest) bool {
-	if len(manifest.Chunks) == 0 {
+func Complete(m *DownloadManifest) bool {
+	if len(m.Chunks) == 0 {
 		return false
 	}
-	_, _, doneChunks := manifestTotals(manifest)
-	return doneChunks == len(manifest.Chunks)
-}
-
-func runStatus(outputPath string) error {
-	path := manifestPath(outputPath)
-	manifest, err := loadManifest(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("manifest not found: %s", path)
-		}
-		return err
-	}
-
-	downloaded, total, doneChunks := manifestTotals(manifest)
-	percent := 0.0
-	if total > 0 {
-		percent = float64(downloaded) / float64(total) * 100
-		if percent > 100 {
-			percent = 100
-		}
-	}
-	state := "incomplete"
-	if doneChunks == len(manifest.Chunks) && len(manifest.Chunks) > 0 {
-		state = "complete"
-	}
-
-	fmt.Println("Manifest:", path)
-	fmt.Println("URL:", manifest.URL)
-	fmt.Println("Output:", manifest.OutputPath)
-	fmt.Println("Total size:", manifest.TotalSize)
-	fmt.Println("Connections:", manifest.Connections)
-	fmt.Println("Queue mode:", manifest.QueueMode)
-	if manifest.QueueMode {
-		fmt.Println("Segment size:", manifest.SegmentSize)
-	}
-	fmt.Printf("Chunks: %d/%d complete\n", doneChunks, len(manifest.Chunks))
-	fmt.Printf("Progress: %d/%d bytes (%.2f%%)\n", downloaded, total, percent)
-	fmt.Println("State:", state)
-
-	fmt.Println()
-	fmt.Println("Raw manifest JSON:")
-	data, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(data))
-	return nil
-}
-
-func runClean(outputPath string) error {
-	path := manifestPath(outputPath)
-	manifest, err := loadManifest(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Println("Manifest not found:", path)
-			fmt.Println("Output file unchanged:", outputPath)
-			return nil
-		}
-		return err
-	}
-
-	complete := manifestComplete(manifest)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	fmt.Println("Removed manifest:", path)
-
-	if complete {
-		fmt.Println("Download is complete; kept output file:", outputPath)
-		return nil
-	}
-
-	if err := os.Remove(outputPath); err != nil {
-		if os.IsNotExist(err) {
-			fmt.Println("Partial output file already missing:", outputPath)
-			return nil
-		}
-		return err
-	}
-
-	fmt.Println("Removed partial output file:", outputPath)
-	return nil
+	_, _, doneChunks := Totals(m)
+	return doneChunks == len(m.Chunks)
 }
