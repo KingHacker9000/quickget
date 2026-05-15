@@ -48,9 +48,12 @@ This behaves the same as `fastget.exe download [options] <url>`.
 | `-d` | Enable dynamic splitting/work stealing | `true` |
 | `-min-split-size int` | Min remaining range size before dynamic split (bytes) | `8388608` |
 | `-min-dynamic-file-size int` | Min file size to allow dynamic splitting (bytes) | `67108864` |
+| `-buffer-size int` | Download buffer size in bytes | `1048576` |
+| `-auto-buffer` | Auto-tune buffer size for output disk before download | `false` |
 | `-http1` | Disable HTTP/2 and force HTTP/1.1 behavior | `false` |
 | `-max-idle-conns int` | Max idle connections globally | `1024` |
 | `-idle-timeout int` | Idle connection timeout (seconds) | `90` |
+| `-write-disk string` | Disk/volume to measure write timing for (example: `C:`) | empty |
 
 Download flags can appear before or after the URL; FastGet normalizes args and treats both styles equivalently.
 
@@ -88,6 +91,14 @@ Custom benchmark:
 
 ```bash
 python .temp/benchmark.py
+```
+
+Built-in disk tuning:
+
+```bash
+fastget.exe disk-test -o C:\temp\fastget-test.tmp
+fastget.exe tune-disk -o C:\temp\fastget-test.tmp
+fastget.exe download -o big.iso -n 8 -auto-buffer <url>
 ```
 
 ## Resume Files

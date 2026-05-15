@@ -64,7 +64,7 @@ func startProgressLoop(downloaded *int64, totalSize int64) (chan struct{}, chan 
 	return done, finished
 }
 
-func startVerboseProgressLoop(downloaded *int64, totalSize int64, chunkTotals []int64, chunkDownloaded []int64) (chan struct{}, chan struct{}) {
+func startVerboseProgressLoop(downloaded *int64, totalSize int64, chunkTotals []int64, chunkDownloaded []int64, writeStats *DownloadStats) (chan struct{}, chan struct{}) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	start := time.Now()
@@ -92,7 +92,11 @@ func startVerboseProgressLoop(downloaded *int64, totalSize int64, chunkTotals []
 			}
 			totalMB := float64(currentTotal) / 1024 / 1024
 			speedMBps := totalMB / elapsed
-			fmt.Printf("[TOTAL] %5.1f%% %.2f/%.2f MB %.2f MB/s\n", totalPercent, totalMB, float64(totalSize)/1024/1024, speedMBps)
+			writePctText := ""
+			if writeStats != nil {
+				writePctText = fmt.Sprintf(" write~%.1f%%", writeStats.WritePercentApprox())
+			}
+			fmt.Printf("[TOTAL] %5.1f%% %.2f/%.2f MB %.2f MB/s%s\n", totalPercent, totalMB, float64(totalSize)/1024/1024, speedMBps, writePctText)
 
 			for i := range chunkTotals {
 				chunkVal := atomic.LoadInt64(&chunkDownloaded[i])

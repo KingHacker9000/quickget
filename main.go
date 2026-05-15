@@ -28,12 +28,16 @@ func run(args []string) error {
 		return runDownload(args[1:])
 	case "inspect":
 		return runInspectCommand(args[1:])
+	case "server-test":
+		return runServerTestCommand(args[1:])
 	case "status":
 		return runStatusCommand(args[1:])
 	case "clean":
 		return runCleanCommand(args[1:])
 	case "hash":
 		return runHashCommand(args[1:])
+	case "disk-test", "tune-disk":
+		return runDiskTestCommand(args[1:])
 	default:
 		return runDownload(args)
 	}
@@ -96,9 +100,12 @@ func printGlobalUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintf(os.Stderr, "  %s download [options] <url>\n", name)
 	fmt.Fprintf(os.Stderr, "  %s inspect <url>\n", name)
+	fmt.Fprintf(os.Stderr, "  %s server-test <url>\n", name)
 	fmt.Fprintf(os.Stderr, "  %s status <output-file>\n", name)
 	fmt.Fprintf(os.Stderr, "  %s clean <output-file>\n", name)
 	fmt.Fprintf(os.Stderr, "  %s hash <file>\n", name)
+	fmt.Fprintf(os.Stderr, "  %s disk-test -o <temp-test-file>\n", name)
+	fmt.Fprintf(os.Stderr, "  %s tune-disk -o <temp-test-file>\n", name)
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Backward compatibility:")
 	fmt.Fprintf(os.Stderr, "  %s [options] <url>  (same as download)\n", name)

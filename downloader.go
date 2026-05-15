@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,9 +42,12 @@ type downloadOptions struct {
 	queueMode          bool
 	segmentSize        int64
 	bufferSize         int
+	bufferSizeSet      bool
+	autoBuffer         bool
 	forceHTTP1         bool
 	maxIdleConns       int
 	idleTimeoutSec     int
+	writeDisk          string
 	url                string
 }
 
@@ -73,6 +77,14 @@ func runDownload(args []string) error {
 	}
 
 	client := newHTTPClient(options.workers, options.forceHTTP1, options.maxIdleConns, options.idleTimeoutSec)
+	if options.autoBuffer && !options.bufferSizeSet {
+		rec, err := RecommendBufferSizeForPath(options.outputPath)
+		if err != nil {
+			return fmt.Errorf("auto buffer tune failed: %w", err)
+		}
+		options.bufferSize = rec.BufferSize
+		fmt.Printf("Auto buffer selected: %s (%d bytes)\n", formatBytesBinary(rec.BufferSize), rec.BufferSize)
+	}
 
 	fmt.Println("URL:", validatedURL)
 	fmt.Println("Output:", options.outputPath)
@@ -121,7 +133,7 @@ func runDownload(args []string) error {
 	}
 
 	fmt.Println("Mode: parallel download")
-	if err := downloadParallel(client, info.FinalURL, options.outputPath, info.Size, options.workers, options.verbose, options.retries, options.dynamic, options.minSplitSize, options.minDynamicFileSize, options.queueMode, options.segmentSize, options.bufferSize); err != nil {
+	if err := downloadParallel(client, info.FinalURL, options.outputPath, info.Size, options.workers, options.verbose, options.retries, options.dynamic, options.minSplitSize, options.minDynamicFileSize, options.queueMode, options.segmentSize, options.bufferSize, options.writeDisk); err != nil {
 		return fmt.Errorf("parallel download failed: %w", err)
 	}
 
@@ -144,9 +156,11 @@ func parseDownloadOptions(args []string) (downloadOptions, error) {
 	queueMode := fs.Bool("queue-mode", false, "enable queue-based segmented downloading")
 	segmentSize := fs.Int64("segment-size", DefaultSegmentSizeBytes, "segment size in bytes used by queue mode")
 	bufferSize := fs.Int("buffer-size", DefaultBufferSizeBytes, "download buffer size in bytes")
+	autoBuffer := fs.Bool("auto-buffer", false, "auto-tune buffer size for output disk before download")
 	forceHTTP1 := fs.Bool("http1", DefaultForceHTTP1, "disable HTTP/2 and force HTTP/1.1 behavior")
 	maxIdleConns := fs.Int("max-idle-conns", DefaultMaxIdleConns, "max idle connections globally")
 	idleTimeoutSec := fs.Int("idle-timeout", DefaultIdleTimeoutSec, "idle connection timeout in seconds")
+	writeDisk := fs.String("write-disk", "", "disk/volume to measure write time for (e.g. C:)")
 
 	fs.Usage = printDownloadUsage
 
@@ -185,6 +199,12 @@ func parseDownloadOptions(args []string) (downloadOptions, error) {
 	if *idleTimeoutSec <= 0 {
 		return opts, errors.New("-idle-timeout must be > 0")
 	}
+	bufferSizeSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "buffer-size" {
+			bufferSizeSet = true
+		}
+	})
 
 	opts = downloadOptions{
 		outputPath:         *output,
@@ -197,9 +217,12 @@ func parseDownloadOptions(args []string) (downloadOptions, error) {
 		queueMode:          *queueMode,
 		segmentSize:        *segmentSize,
 		bufferSize:         *bufferSize,
+		bufferSizeSet:      bufferSizeSet,
+		autoBuffer:         *autoBuffer,
 		forceHTTP1:         *forceHTTP1,
 		maxIdleConns:       *maxIdleConns,
 		idleTimeoutSec:     *idleTimeoutSec,
+		writeDisk:          strings.TrimSpace(*writeDisk),
 		url:                fs.Arg(0),
 	}
 
@@ -227,9 +250,13 @@ func printDownloadUsage() {
 	fmt.Fprintln(os.Stderr, "        enable queue-based segmented downloading (default false)")
 	fmt.Fprintf(os.Stderr, "  -segment-size int\n        segment size in bytes for queue mode (default %d)\n", DefaultSegmentSizeBytes)
 	fmt.Fprintf(os.Stderr, "  -buffer-size int\n        download buffer size in bytes (default %d)\n", DefaultBufferSizeBytes)
+	fmt.Fprintln(os.Stderr, "  -auto-buffer")
+	fmt.Fprintln(os.Stderr, "        auto-tune buffer size for output disk before download")
 	fmt.Fprintf(os.Stderr, "  -http1\n        disable HTTP/2 and force HTTP/1.1 behavior (default %t)\n", DefaultForceHTTP1)
 	fmt.Fprintf(os.Stderr, "  -max-idle-conns int\n        max idle connections globally (default %d)\n", DefaultMaxIdleConns)
 	fmt.Fprintf(os.Stderr, "  -idle-timeout int\n        idle connection timeout in seconds (default %d)\n", DefaultIdleTimeoutSec)
+	fmt.Fprintln(os.Stderr, "  -write-disk string")
+	fmt.Fprintln(os.Stderr, "        disk/volume to measure write timing for (example: C:)")
 }
 
 func normalizeDownloadArgs(args []string) ([]string, error) {
@@ -238,9 +265,10 @@ func normalizeDownloadArgs(args []string) ([]string, error) {
 	}
 
 	boolFlags := map[string]bool{
-		"v":     true,
-		"d":     true,
-		"http1": true,
+		"v":           true,
+		"d":           true,
+		"http1":       true,
+		"auto-buffer": true,
 	}
 	valueFlags := map[string]bool{
 		"o":                     true,
@@ -252,6 +280,7 @@ func normalizeDownloadArgs(args []string) ([]string, error) {
 		"buffer-size":           true,
 		"max-idle-conns":        true,
 		"idle-timeout":          true,
+		"write-disk":            true,
 	}
 	boolFlags["queue-mode"] = true
 
@@ -366,7 +395,7 @@ func newHTTPClient(connections int, forceHTTP1 bool, maxIdleConns int, idleTimeo
 	return &http.Client{Transport: transport}
 }
 
-func downloadSegment(client *http.Client, rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64, bufPool *sync.Pool) error {
+func downloadSegment(client *http.Client, rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64, bufPool *sync.Pool, stats *DownloadStats) error {
 	if task.End < task.Start {
 		return fmt.Errorf("invalid range %d-%d", task.Start, task.End)
 	}
@@ -383,8 +412,9 @@ func downloadSegment(client *http.Client, rawURL string, outputPath string, task
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("expected 206 Partial Content, got %s", resp.Status)
+	byteRange := fmt.Sprintf("bytes=%d-%d", task.Start, task.End)
+	if err := explainServerStatus(resp.StatusCode, true, byteRange, rawURL); err != nil {
+		return err
 	}
 
 	file, err := os.OpenFile(outputPath, os.O_WRONLY, 0644)
@@ -400,7 +430,11 @@ func downloadSegment(client *http.Client, rawURL string, outputPath string, task
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
+			writeStart := time.Now()
 			written, writeErr := file.WriteAt(buf[:n], offset)
+			if stats != nil {
+				stats.ObserveWrite(time.Since(writeStart))
+			}
 			if writeErr != nil {
 				return writeErr
 			}
@@ -423,13 +457,13 @@ func downloadSegment(client *http.Client, rawURL string, outputPath string, task
 	return nil
 }
 
-func downloadSegmentWithRetry(client *http.Client, rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64, maxRetries int, bufPool *sync.Pool) error {
+func downloadSegmentWithRetry(client *http.Client, rawURL string, outputPath string, task SegmentTask, downloaded *int64, chunkDownloaded *int64, maxRetries int, bufPool *sync.Pool, stats *DownloadStats) error {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Second)
 		}
-		err := downloadSegment(client, rawURL, outputPath, task, downloaded, chunkDownloaded, bufPool)
+		err := downloadSegment(client, rawURL, outputPath, task, downloaded, chunkDownloaded, bufPool, stats)
 		if err == nil {
 			return nil
 		}
@@ -505,7 +539,7 @@ func splitIntoSegments(size int64, segmentSize int64) []Chunk {
 	return chunks
 }
 
-func downloadParallel(client *http.Client, rawURL string, outputPath string, totalSize int64, connections int, verbose bool, maxRetries int, dynamic bool, minSplitSize int64, minDynamicFileSize int64, queueMode bool, segmentSize int64, bufferSize int) error {
+func downloadParallel(client *http.Client, rawURL string, outputPath string, totalSize int64, connections int, verbose bool, maxRetries int, dynamic bool, minSplitSize int64, minDynamicFileSize int64, queueMode bool, segmentSize int64, bufferSize int, writeDisk string) error {
 	mPath := manifestPath(outputPath)
 	var manifest DownloadManifest
 
@@ -572,6 +606,11 @@ func downloadParallel(client *http.Client, rawURL string, outputPath string, tot
 	}
 
 	var downloaded int64
+	var writeStats *DownloadStats
+	measureWrites := shouldMeasureWriteDisk(outputPath, writeDisk)
+	if measureWrites {
+		writeStats = NewDownloadStats()
+	}
 	chunkDownloaded := make([]int64, len(manifest.Chunks))
 	chunkTotals := make([]int64, len(manifest.Chunks))
 	for i, c := range manifest.Chunks {
@@ -583,7 +622,7 @@ func downloadParallel(client *http.Client, rawURL string, outputPath string, tot
 	var progressDone chan struct{}
 	var progressFinished chan struct{}
 	if verbose {
-		progressDone, progressFinished = startVerboseProgressLoop(&downloaded, totalSize, chunkTotals, chunkDownloaded)
+		progressDone, progressFinished = startVerboseProgressLoop(&downloaded, totalSize, chunkTotals, chunkDownloaded, writeStats)
 	} else {
 		progressDone, progressFinished = startProgressLoop(&downloaded, totalSize)
 	}
@@ -620,7 +659,7 @@ func downloadParallel(client *http.Client, rawURL string, outputPath string, tot
 	}()
 
 	if queueMode {
-		return runQueueMode(client, rawURL, outputPath, connections, maxRetries, mPath, &manifest, &manifestMu, &downloaded, chunkDownloaded, stopSaver, saverDone, progressDone, progressFinished, bufPool)
+		return runQueueMode(client, rawURL, outputPath, connections, maxRetries, mPath, &manifest, &manifestMu, &downloaded, chunkDownloaded, stopSaver, saverDone, progressDone, progressFinished, bufPool, writeStats)
 	}
 
 	pickTask := func() (SegmentTask, bool) {
@@ -677,7 +716,7 @@ func downloadParallel(client *http.Client, rawURL string, outputPath string, tot
 					return
 				}
 
-				if err := downloadSegmentWithRetry(client, rawURL, outputPath, task, &downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries, bufPool); err != nil {
+				if err := downloadSegmentWithRetry(client, rawURL, outputPath, task, &downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries, bufPool, writeStats); err != nil {
 					errChan <- fmt.Errorf("chunk %d segment %d-%d failed: %w", task.ChunkIndex, task.Start, task.End, err)
 					return
 				}
@@ -715,11 +754,12 @@ func downloadParallel(client *http.Client, rawURL string, outputPath string, tot
 	if err := os.Remove(mPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	printStatsLine(writeStats)
 	fmt.Println("Download completed successfully.")
 	return nil
 }
 
-func runQueueMode(client *http.Client, rawURL string, outputPath string, connections int, maxRetries int, mPath string, manifest *DownloadManifest, manifestMu *sync.Mutex, downloaded *int64, chunkDownloaded []int64, stopSaver chan struct{}, saverDone chan struct{}, progressDone chan struct{}, progressFinished chan struct{}, bufPool *sync.Pool) error {
+func runQueueMode(client *http.Client, rawURL string, outputPath string, connections int, maxRetries int, mPath string, manifest *DownloadManifest, manifestMu *sync.Mutex, downloaded *int64, chunkDownloaded []int64, stopSaver chan struct{}, saverDone chan struct{}, progressDone chan struct{}, progressFinished chan struct{}, bufPool *sync.Pool, writeStats *DownloadStats) error {
 	taskCh := make(chan SegmentTask, connections*2)
 	errChan := make(chan error, connections)
 	var workerWG sync.WaitGroup
@@ -729,7 +769,7 @@ func runQueueMode(client *http.Client, rawURL string, outputPath string, connect
 		go func() {
 			defer workerWG.Done()
 			for task := range taskCh {
-				if err := downloadSegmentWithRetry(client, rawURL, outputPath, task, downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries, bufPool); err != nil {
+				if err := downloadSegmentWithRetry(client, rawURL, outputPath, task, downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries, bufPool, writeStats); err != nil {
 					errChan <- fmt.Errorf("segment %d (%d-%d) failed: %w", task.ChunkIndex, task.Start, task.End, err)
 					return
 				}
@@ -779,6 +819,21 @@ func runQueueMode(client *http.Client, rawURL string, outputPath string, connect
 	if err := os.Remove(mPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	printStatsLine(writeStats)
 	fmt.Println("Download completed successfully.")
 	return nil
+}
+
+func shouldMeasureWriteDisk(outputPath, writeDisk string) bool {
+	if strings.TrimSpace(writeDisk) == "" {
+		return true
+	}
+	return strings.EqualFold(filepath.VolumeName(outputPath), strings.TrimSpace(writeDisk))
+}
+
+func printStatsLine(writeStats *DownloadStats) {
+	if writeStats == nil {
+		return
+	}
+	fmt.Printf("STATS write_nanos=%d write_pct=%.2f\n", writeStats.WriteNanos(), writeStats.WritePercentApprox())
 }
