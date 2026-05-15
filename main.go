@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -10,8 +11,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// Constanst
+// refreshInterval refresh terminal with stats every 200ms
+const refreshInterval = 200
 
 type Chunk struct {
 	Index      int
@@ -19,6 +25,14 @@ type Chunk struct {
 	End        int64
 	Downloaded int64
 	Done       bool
+}
+
+type DownloadManifest struct {
+	URL         string  `json:"url"`
+	OutputPath  string  `json:"output_path"`
+	TotalSize   int64   `json:"total_size"`
+	Connections int     `json:"connections"`
+	Chunks      []Chunk `json:"chunks"`
 }
 
 func splitIntoChunks(size int64, connections int) []Chunk {
@@ -61,7 +75,7 @@ func preallocateFile(outputPath string, size int64) error {
 		return fmt.Errorf("invalid file size: %d", size)
 	}
 
-	f, err := os.Create(outputPath)
+	f, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
@@ -70,7 +84,32 @@ func preallocateFile(outputPath string, size int64) error {
 	return f.Truncate(size)
 }
 
-func downloadChunk(rawURL string, outputPath string, chunk *Chunk, progressChan chan<- int64) error {
+func manifestPath(outputPath string) string {
+	return outputPath + ".fastget.json"
+}
+
+func saveManifest(path string, manifest *DownloadManifest) error {
+	b, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0644)
+}
+
+func loadManifest(path string) (*DownloadManifest, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var m DownloadManifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+func downloadChunk(rawURL string, outputPath string, chunk *Chunk, downloaded *int64, chunkDownloaded *int64) error {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
@@ -104,8 +143,8 @@ func downloadChunk(rawURL string, outputPath string, chunk *Chunk, progressChan 
 				return writeErr
 			}
 			offset += int64(written)
-			chunk.Downloaded += int64(written)
-			progressChan <- int64(written)
+			atomic.AddInt64(downloaded, int64(written))
+			atomic.AddInt64(chunkDownloaded, int64(written))
 		}
 
 		if readErr == io.EOF {
@@ -120,65 +159,242 @@ func downloadChunk(rawURL string, outputPath string, chunk *Chunk, progressChan 
 	return nil
 }
 
-func downloadParallel(rawURL string, outputPath string, totalSize int64, connections int) error {
-	chunks := splitIntoChunks(totalSize, connections)
+func downloadChunkWithRetry(rawURL string, outputPath string, chunk *Chunk, downloaded *int64, chunkDownloaded *int64, maxRetries int) error {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Second)
+		}
+
+		err := downloadChunk(rawURL, outputPath, chunk, downloaded, chunkDownloaded)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+	}
+	return lastErr
+}
+
+func printProgress(downloaded, total int64, start time.Time) {
+	elapsed := time.Since(start).Seconds()
+	if elapsed <= 0 {
+		elapsed = 1
+	}
+
+	downloadedMB := float64(downloaded) / 1024 / 1024
+	speedMBps := downloadedMB / elapsed
+
+	if total > 0 {
+		percent := float64(downloaded) / float64(total) * 100
+		if percent > 100 {
+			percent = 100
+		}
+		barWidth := 30
+		filled := int(percent / 100 * float64(barWidth))
+		if filled < 0 {
+			filled = 0
+		}
+		if filled > barWidth {
+			filled = barWidth
+		}
+		bar := strings.Repeat("=", filled) + strings.Repeat(" ", barWidth-filled)
+		fmt.Printf("\r[%s] %5.1f%% %.2f MB / %.2f MB %.2f MB/s", bar, percent, downloadedMB, float64(total)/1024/1024, speedMBps)
+		return
+	}
+
+	fmt.Printf("\r[%-30s]   ??.?%% %.2f MB / ? MB %.2f MB/s", "", downloadedMB, speedMBps)
+}
+
+func startProgressLoop(downloaded *int64, totalSize int64) (chan struct{}, chan struct{}) {
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	start := time.Now()
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(refreshInterval * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				current := atomic.LoadInt64(downloaded)
+				printProgress(current, totalSize, start)
+			case <-done:
+				current := atomic.LoadInt64(downloaded)
+				printProgress(current, totalSize, start)
+				fmt.Println()
+				return
+			}
+		}
+	}()
+	return done, finished
+}
+
+func startVerboseProgressLoop(downloaded *int64, totalSize int64, chunkTotals []int64, chunkDownloaded []int64) (chan struct{}, chan struct{}) {
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	start := time.Now()
+
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(refreshInterval * time.Millisecond)
+		defer ticker.Stop()
+		lines := len(chunkTotals) + 1
+		firstRender := true
+
+		render := func(final bool) {
+			if !firstRender {
+				fmt.Printf("\033[%dA", lines)
+			}
+
+			currentTotal := atomic.LoadInt64(downloaded)
+			elapsed := time.Since(start).Seconds()
+			if elapsed <= 0 {
+				elapsed = 1
+			}
+			totalPercent := float64(currentTotal) / float64(totalSize) * 100
+			if totalPercent > 100 {
+				totalPercent = 100
+			}
+			totalMB := float64(currentTotal) / 1024 / 1024
+			speedMBps := totalMB / elapsed
+			fmt.Printf("[TOTAL] %5.1f%% %.2f/%.2f MB %.2f MB/s\n", totalPercent, totalMB, float64(totalSize)/1024/1024, speedMBps)
+
+			for i := range chunkTotals {
+				chunkVal := atomic.LoadInt64(&chunkDownloaded[i])
+				percent := float64(chunkVal) / float64(chunkTotals[i]) * 100
+				if percent > 100 {
+					percent = 100
+				}
+				barWidth := 24
+				filled := int(percent / 100 * float64(barWidth))
+				if filled < 0 {
+					filled = 0
+				}
+				if filled > barWidth {
+					filled = barWidth
+				}
+				bar := strings.Repeat("=", filled) + strings.Repeat(" ", barWidth-filled)
+				fmt.Printf("[C%02d] [%s] %5.1f%% %.2f/%.2f MB\n", i, bar, percent, float64(chunkVal)/1024/1024, float64(chunkTotals[i])/1024/1024)
+			}
+
+			firstRender = false
+			if final {
+				fmt.Println()
+			}
+		}
+
+		for {
+			select {
+			case <-ticker.C:
+				render(false)
+			case <-done:
+				render(true)
+				return
+			}
+		}
+	}()
+
+	return done, finished
+}
+
+func downloadParallel(rawURL string, outputPath string, totalSize int64, connections int, verbose bool, maxRetries int) error {
+	mPath := manifestPath(outputPath)
+	var manifest DownloadManifest
+	resuming := false
+
+	existing, err := loadManifest(mPath)
+	if err == nil && existing.URL == rawURL && existing.TotalSize == totalSize {
+		manifest = *existing
+		resuming = true
+	} else {
+		chunks := splitIntoChunks(totalSize, connections)
+		if len(chunks) == 0 {
+			return fmt.Errorf("cannot split file into chunks")
+		}
+		manifest = DownloadManifest{
+			URL:         rawURL,
+			OutputPath:  outputPath,
+			TotalSize:   totalSize,
+			Connections: connections,
+			Chunks:      chunks,
+		}
+	}
+
+	if !resuming {
+		if err := preallocateFile(outputPath, totalSize); err != nil {
+			return err
+		}
+		if err := saveManifest(mPath, &manifest); err != nil {
+			return err
+		}
+	}
+
+	chunks := manifest.Chunks
 	if len(chunks) == 0 {
 		return fmt.Errorf("cannot split file into chunks")
 	}
 
-	if err := preallocateFile(outputPath, totalSize); err != nil {
-		return err
+	errChan := make(chan error, len(chunks))
+	var downloaded int64
+	chunkDownloaded := make([]int64, len(chunks))
+	chunkTotals := make([]int64, len(chunks))
+	for i, c := range chunks {
+		chunkTotals[i] = c.End - c.Start + 1
+		if c.Done {
+			chunkDownloaded[i] = chunkTotals[i]
+			atomic.AddInt64(&downloaded, chunkTotals[i])
+		}
 	}
 
-	progressChan := make(chan int64, connections*4)
-	errChan := make(chan error, len(chunks))
+	var progressDone chan struct{}
+	var progressFinished chan struct{}
+	if verbose {
+		progressDone, progressFinished = startVerboseProgressLoop(&downloaded, totalSize, chunkTotals, chunkDownloaded)
+	} else {
+		progressDone, progressFinished = startProgressLoop(&downloaded, totalSize)
+	}
 
+	var manifestMu sync.Mutex
 	var wg sync.WaitGroup
 	for i := range chunks {
+		if chunks[i].Done {
+			continue
+		}
+
 		wg.Add(1)
 		chunk := &chunks[i]
 		go func() {
 			defer wg.Done()
-			if err := downloadChunk(rawURL, outputPath, chunk, progressChan); err != nil {
+			if err := downloadChunkWithRetry(rawURL, outputPath, chunk, &downloaded, &chunkDownloaded[chunk.Index], maxRetries); err != nil {
 				errChan <- fmt.Errorf("chunk %d failed: %w", chunk.Index, err)
+				return
+			}
+
+			manifestMu.Lock()
+			manifest.Chunks[chunk.Index].Done = true
+			manifest.Chunks[chunk.Index].Downloaded = chunk.End - chunk.Start + 1
+			saveErr := saveManifest(mPath, &manifest)
+			manifestMu.Unlock()
+			if saveErr != nil {
+				errChan <- fmt.Errorf("chunk %d manifest save failed: %w", chunk.Index, saveErr)
 			}
 		}()
 	}
 
-	go func() {
-		wg.Wait()
-		close(progressChan)
-		close(errChan)
-	}()
-
-	var downloaded int64
-	start := time.Now()
-	lastPrint := start
-	lastBytes := int64(0)
-
-	for n := range progressChan {
-		downloaded += n
-		now := time.Now()
-		if now.Sub(lastPrint) >= time.Second || downloaded == totalSize {
-			interval := now.Sub(lastPrint).Seconds()
-			if interval <= 0 {
-				interval = 1
-			}
-			speedMBps := float64(downloaded-lastBytes) / (1024 * 1024) / interval
-			downloadedMB := float64(downloaded) / (1024 * 1024)
-			totalMB := float64(totalSize) / (1024 * 1024)
-			percent := (float64(downloaded) / float64(totalSize)) * 100
-			fmt.Printf("\rDownloaded: %.2f MB / %.2f MB (%.1f%%) Speed: %.2f MB/s", downloadedMB, totalMB, percent, speedMBps)
-			lastPrint = now
-			lastBytes = downloaded
-		}
-	}
-	fmt.Println()
+	wg.Wait()
+	close(progressDone)
+	<-progressFinished
+	close(errChan)
 
 	for err := range errChan {
 		if err != nil {
 			return err
 		}
+	}
+
+	if err := os.Remove(mPath); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 
 	return nil
@@ -216,7 +432,7 @@ func getFileInfo(rawURL string) (finalURL string, size int64, rangeSupported boo
 	return finalURL, size, rangeSupported, nil
 }
 
-func downloadSingle(rawURL string, outputPath string, totalSize int64) error {
+func downloadSingle(rawURL string, outputPath string, totalSize int64, verbose bool) error {
 	resp, err := http.Get(rawURL)
 	if err != nil {
 		return err
@@ -233,40 +449,23 @@ func downloadSingle(rawURL string, outputPath string, totalSize int64) error {
 	}
 	defer out.Close()
 
-	buf := make([]byte, 32*1024)
 	var downloaded int64
-	start := time.Now()
-	lastPrint := start
-	lastBytes := int64(0)
+	progressDone, progressFinished := startProgressLoop(&downloaded, totalSize)
+	defer func() {
+		close(progressDone)
+		<-progressFinished
+	}()
+
+	buf := make([]byte, 32*1024)
 
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			if _, writeErr := out.Write(buf[:n]); writeErr != nil {
+			written, writeErr := out.Write(buf[:n])
+			if writeErr != nil {
 				return writeErr
 			}
-			downloaded += int64(n)
-		}
-
-		now := time.Now()
-		if now.Sub(lastPrint) >= time.Second || (readErr == io.EOF && downloaded > 0) {
-			interval := now.Sub(lastPrint).Seconds()
-			if interval <= 0 {
-				interval = 1
-			}
-			speedMBps := float64(downloaded-lastBytes) / (1024 * 1024) / interval
-			downloadedMB := float64(downloaded) / (1024 * 1024)
-
-			if totalSize > 0 {
-				totalMB := float64(totalSize) / (1024 * 1024)
-				percent := (float64(downloaded) / float64(totalSize)) * 100
-				fmt.Printf("\rDownloaded: %.2f MB / %.2f MB (%.1f%%) Speed: %.2f MB/s", downloadedMB, totalMB, percent, speedMBps)
-			} else {
-				fmt.Printf("\rDownloaded: %.2f MB / ? MB (?%%) Speed: %.2f MB/s", downloadedMB, speedMBps)
-			}
-
-			lastPrint = now
-			lastBytes = downloaded
+			atomic.AddInt64(&downloaded, int64(written))
 		}
 
 		if readErr == io.EOF {
@@ -277,13 +476,14 @@ func downloadSingle(rawURL string, outputPath string, totalSize int64) error {
 		}
 	}
 
-	fmt.Println()
 	return nil
 }
 
 func main() {
 	out := flag.String("o", "", "output filename")
 	workers := flag.Int("n", 8, "number of parallel connections")
+	retries := flag.Int("retries", 3, "max retries per chunk")
+	verbose := flag.Bool("v", false, "verbose progress output (includes per-chunk status)")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options] <url>\n\n", os.Args[0])
 		fmt.Fprintln(flag.CommandLine.Output(), "Options:")
@@ -307,6 +507,10 @@ func main() {
 
 	if *workers <= 0 {
 		fmt.Fprintln(os.Stderr, "error: -n must be greater than 0")
+		os.Exit(1)
+	}
+	if *retries < 0 {
+		fmt.Fprintln(os.Stderr, "error: -retries must be >= 0")
 		os.Exit(1)
 	}
 
@@ -340,14 +544,14 @@ func main() {
 	}
 
 	if size > 0 && rangeSupported {
-		if err := downloadParallel(finalURL, *out, size, *workers); err != nil {
+		if err := downloadParallel(finalURL, *out, size, *workers, *verbose, *retries); err != nil {
 			fmt.Fprintf(os.Stderr, "error: parallel download failed: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	if err := downloadSingle(finalURL, *out, size); err != nil {
+	if err := downloadSingle(finalURL, *out, size, *verbose); err != nil {
 		fmt.Fprintf(os.Stderr, "error: download failed: %v\n", err)
 		os.Exit(1)
 	}
