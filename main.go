@@ -28,6 +28,8 @@ func run(args []string) error {
 		return runDownload(args[1:])
 	case "inspect":
 		return runInspectCommand(args[1:])
+	case "filestats":
+		return runFileStatsCommand(args[1:])
 	case "server-test":
 		return runServerTestCommand(args[1:])
 	case "status":
@@ -100,6 +102,7 @@ func printGlobalUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintf(os.Stderr, "  %s download [options] <url>\n", name)
 	fmt.Fprintf(os.Stderr, "  %s inspect <url>\n", name)
+	fmt.Fprintf(os.Stderr, "  %s filestats <url>\n", name)
 	fmt.Fprintf(os.Stderr, "  %s server-test <url>\n", name)
 	fmt.Fprintf(os.Stderr, "  %s status <output-file>\n", name)
 	fmt.Fprintf(os.Stderr, "  %s clean <output-file>\n", name)

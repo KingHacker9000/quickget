@@ -47,39 +47,20 @@ func runInspect(rawURL string) error {
 }
 
 func fetchURLInfo(client *http.Client, rawURL string, headers http.Header, userAgent string) (URLInfo, error) {
-	req, err := http.NewRequest(http.MethodHead, rawURL, nil)
+	stats, err := FetchRemoteFileStats(client, rawURL, headers, userAgent)
 	if err != nil {
 		return URLInfo{}, err
 	}
-	applyHeaders(req, headers, userAgent)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return URLInfo{}, err
-	}
-	defer resp.Body.Close()
-
-	size := int64(-1)
-	contentLength := strings.TrimSpace(resp.Header.Get("Content-Length"))
-	if contentLength != "" {
-		if v, parseErr := parseInt64(contentLength); parseErr == nil {
-			size = v
-		}
-	}
-
-	acceptRanges := strings.ToLower(resp.Header.Get("Accept-Ranges"))
-	rangeSupported := strings.Contains(acceptRanges, "bytes")
-	contentDisposition := strings.TrimSpace(resp.Header.Get("Content-Disposition"))
-	suggestedName := detectOutputFilename(resp.Request.URL.String(), contentDisposition)
+	suggestedName := detectOutputFilename(stats.FinalURL, stats.ContentDisposition)
 
 	return URLInfo{
 		InputURL:            rawURL,
-		FinalURL:            resp.Request.URL.String(),
-		Size:                size,
-		RangeSupported:      rangeSupported,
-		Status:              resp.Status,
-		StatusCode:          resp.StatusCode,
-		ContentDisposition:  contentDisposition,
+		FinalURL:            stats.FinalURL,
+		Size:                stats.Size,
+		RangeSupported:      stats.RangeSupported,
+		Status:              stats.Status,
+		StatusCode:          stats.StatusCode,
+		ContentDisposition:  stats.ContentDisposition,
 		SuggestedOutputName: suggestedName,
 	}, nil
 }

@@ -28,35 +28,22 @@ func ProbeServer(rawURL string, client *http.Client) (*ServerProbeResult, error)
 		return nil, err
 	}
 
-	headReq, err := http.NewRequest(http.MethodHead, validatedURL, nil)
+	stats, err := FetchRemoteFileStats(client, validatedURL, nil, DefaultUserAgent)
 	if err != nil {
 		return nil, err
 	}
-
-	headResp, err := client.Do(headReq)
-	if err != nil {
-		return nil, err
-	}
-	defer headResp.Body.Close()
 
 	result := &ServerProbeResult{
 		URL:                  validatedURL,
-		FinalURL:             headResp.Request.URL.String(),
-		StatusCode:           headResp.StatusCode,
-		ContentLength:        -1,
-		AcceptRanges:         strings.TrimSpace(headResp.Header.Get("Accept-Ranges")),
-		SuggestedOutputName:  detectOutputFilename(headResp.Request.URL.String(), strings.TrimSpace(headResp.Header.Get("Content-Disposition"))),
+		FinalURL:             stats.FinalURL,
+		StatusCode:           stats.StatusCode,
+		ContentLength:        stats.Size,
+		AcceptRanges:         stats.AcceptRanges,
+		SuggestedOutputName:  detectOutputFilename(stats.FinalURL, stats.ContentDisposition),
 		SuggestedConnections: 2,
 	}
 
-	contentLength := strings.TrimSpace(headResp.Header.Get("Content-Length"))
-	if contentLength != "" {
-		if v, parseErr := parseInt64(contentLength); parseErr == nil {
-			result.ContentLength = v
-		}
-	}
-
-	rangeReq, err := http.NewRequest(http.MethodGet, validatedURL, nil)
+	rangeReq, err := http.NewRequest(http.MethodGet, stats.FinalURL, nil)
 	if err != nil {
 		return nil, err
 	}
