@@ -1,11 +1,11 @@
 # QuickGet
 
-<!-- Replace OWNER with your GitHub username or org, e.g. ashishajin/quickget -->
-[![CI](https://github.com/OWNER/quickget/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/quickget/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/OWNER/quickget/actions/workflows/codeql.yml/badge.svg)](https://github.com/OWNER/quickget/actions/workflows/codeql.yml)
-[![Release](https://img.shields.io/github/v/release/OWNER/quickget)](https://github.com/OWNER/quickget/releases)
+<!-- Replace KingHacker9000 with your GitHub username or org, e.g. ashishajin/quickget -->
+[![CI](https://github.com/KingHacker9000/quickget/actions/workflows/ci.yml/badge.svg)](https://github.com/KingHacker9000/quickget/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/KingHacker9000/quickget/actions/workflows/codeql.yml/badge.svg)](https://github.com/KingHacker9000/quickget/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/KingHacker9000/quickget)](https://github.com/KingHacker9000/quickget/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/OWNER/quickget)](go.mod)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/KingHacker9000/quickget)](go.mod)
 
 <div align="center">
 
