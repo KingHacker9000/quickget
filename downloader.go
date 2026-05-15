@@ -90,13 +90,22 @@ func runDownload(args []string) error {
 	fmt.Println("File size:", info.Size)
 	fmt.Println("Range supported:", info.RangeSupported)
 
-	chunks := splitIntoChunks(info.Size, options.workers)
-	if len(chunks) == 0 {
-		fmt.Println("Chunks: unavailable (file size unknown or invalid)")
+	if options.queueMode {
+		segments := splitIntoSegments(info.Size, options.segmentSize)
+		if len(segments) == 0 {
+			fmt.Println("Segments: unavailable (file size unknown or invalid)")
+		} else {
+			fmt.Printf("Segments: %d jobs\n", len(segments))
+		}
 	} else {
-		fmt.Println("Chunks:")
-		for _, c := range chunks {
-			fmt.Printf("  [%d] %d-%d\n", c.Index, c.Start, c.End)
+		chunks := splitIntoChunks(info.Size, options.workers)
+		if len(chunks) == 0 {
+			fmt.Println("Chunks: unavailable (file size unknown or invalid)")
+		} else {
+			fmt.Println("Chunks:")
+			for _, c := range chunks {
+				fmt.Printf("  [%d] %d-%d\n", c.Index, c.Start, c.End)
+			}
 		}
 	}
 
