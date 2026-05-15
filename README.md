@@ -3,7 +3,7 @@
 <!-- Replace KingHacker9000 with your GitHub username or org, e.g. ashishajin/quickget -->
 [![CI](https://github.com/KingHacker9000/quickget/actions/workflows/ci.yml/badge.svg)](https://github.com/KingHacker9000/quickget/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/KingHacker9000/quickget/actions/workflows/codeql.yml/badge.svg)](https://github.com/KingHacker9000/quickget/actions/workflows/codeql.yml)
-[![Release](https://img.shields.io/github/v/release/KingHacker9000/quickget)](https://github.com/KingHacker9000/quickget/releases)
+[![Release](https://img.shields.io/github/v/release/KingHacker9000/quickget?display_name=tag&include_prereleases)](https://github.com/KingHacker9000/quickget/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/KingHacker9000/quickget)](go.mod)
 
@@ -27,6 +27,16 @@ Built in Go with parallel range requests, resume-safe manifests, and practical t
 - Utilities for probing, status, cleanup, hashing, and disk tuning
 
 ## Installation
+
+### Quick Install
+
+```bash
+go install github.com/KingHacker9000/quickget/cmd/quickget@latest
+```
+
+Or download prebuilt binaries from:
+
+`https://github.com/KingHacker9000/quickget/releases/latest`
 
 ### Build
 
