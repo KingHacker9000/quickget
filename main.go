@@ -55,6 +55,20 @@ func splitIntoChunks(size int64, connections int) []Chunk {
 	return chunks
 }
 
+func preallocateFile(outputPath string, size int64) error {
+	if size < 0 {
+		return fmt.Errorf("invalid file size: %d", size)
+	}
+
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return f.Truncate(size)
+}
+
 // getFileInfo performs a HEAD request to the given URL and returns the final URL after redirects,
 // the content length (or -1 if not available), whether byte-range requests are supported, and any error encountered.
 func getFileInfo(rawURL string) (finalURL string, size int64, rangeSupported bool, err error) {
@@ -207,6 +221,13 @@ func main() {
 		fmt.Println("Chunks:")
 		for _, c := range chunks {
 			fmt.Printf("  [%d] %d-%d\n", c.Index, c.Start, c.End)
+		}
+	}
+
+	if size >= 0 {
+		if err := preallocateFile(*out, size); err != nil {
+			fmt.Fprintf(os.Stderr, "error: preallocate failed: %v\n", err)
+			os.Exit(1)
 		}
 	}
 
