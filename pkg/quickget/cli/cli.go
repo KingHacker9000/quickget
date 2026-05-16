@@ -12,7 +12,9 @@ import (
 
 	"quickget/pkg/quickget"
 	"quickget/pkg/quickget/core"
+	"quickget/pkg/quickget/events"
 	"quickget/pkg/quickget/probe"
+	"quickget/pkg/quickget/progress"
 	"quickget/pkg/quickget/tune"
 )
 
@@ -79,10 +81,65 @@ func runDownload(args []string, stdout io.Writer, stderr io.Writer, binName stri
 		}
 		return err
 	}
-	options.Stdout = stdout
+	if !options.JsonEvents {
+		options.Stdout = stdout
+		_, err = quickget.Download(context.Background(), quickget.DownloadRequest{Options: options})
+		return err
+	}
 
-	_, err = quickget.Download(context.Background(), quickget.DownloadRequest{Options: options})
-	return err
+	emitter := events.NewEmitter(stdout)
+	options.Stdout = io.Discard
+
+	output := options.OutputPath
+	if strings.TrimSpace(output) == "" {
+		output = "auto"
+	}
+	mode := "parallel"
+	if options.QueueMode {
+		mode = "queue"
+	}
+	_ = emitter.Emit(map[string]any{
+		"type":        "start",
+		"url":         options.URL,
+		"output":      output,
+		"size":        int64(-1),
+		"mode":        mode,
+		"connections": options.Workers,
+	})
+
+	reporter := func(s progress.Snapshot) {
+		_ = emitter.Emit(map[string]any{
+			"type":       "progress",
+			"downloaded": s.Downloaded,
+			"total":      s.Total,
+			"percent":    s.Percent,
+			"speed_mbps": s.SpeedMBps,
+			"avg_mbps":   s.SpeedMBps,
+		})
+	}
+	res, err := quickget.Download(context.Background(), quickget.DownloadRequest{Options: options, Reporter: reporter})
+	if err != nil {
+		isCancelled := errors.Is(err, context.Canceled) || strings.Contains(strings.ToLower(err.Error()), "download cancelled")
+		if isCancelled {
+			_ = emitter.Emit(map[string]any{
+				"type":    "cancelled",
+				"output":  output,
+				"message": "download cancelled; resume state saved",
+			})
+		} else {
+			_ = emitter.Emit(map[string]any{
+				"type":    "error",
+				"message": err.Error(),
+			})
+		}
+		return err
+	}
+	_ = emitter.Emit(map[string]any{
+		"type":   "complete",
+		"output": res.OutputPath,
+		"size":   res.Size,
+	})
+	return nil
 }
 
 func parseDownloadOptions(args []string, stderr io.Writer, binName string) (core.Request, error) {
@@ -103,6 +160,7 @@ func parseDownloadOptions(args []string, stderr io.Writer, binName string) (core
 	segmentSize := fs.Int64("segment-size", core.DefaultSegmentSizeBytes, "segment size in bytes used by queue mode")
 	bufferSize := fs.Int("buffer-size", core.DefaultBufferSizeBytes, "download buffer size in bytes")
 	autoBuffer := fs.Bool("auto-buffer", false, "auto-tune buffer size for output disk before download")
+	jsonEvents := fs.Bool("json-events", false, "emit newline-delimited JSON progress events to stdout")
 	forceHTTP1 := fs.Bool("http1", core.DefaultForceHTTP1, "disable HTTP/2 and force HTTP/1.1 behavior")
 	maxIdleConns := fs.Int("max-idle-conns", core.DefaultMaxIdleConns, "max idle connections globally")
 	idleTimeoutSec := fs.Int("idle-timeout", core.DefaultIdleTimeoutSec, "idle connection timeout in seconds")
@@ -169,6 +227,7 @@ func parseDownloadOptions(args []string, stderr io.Writer, binName string) (core
 	opts.BufferSize = *bufferSize
 	opts.BufferSizeSet = bufferSizeSet
 	opts.AutoBuffer = *autoBuffer
+	opts.JsonEvents = *jsonEvents
 	opts.ForceHTTP1 = *forceHTTP1
 	opts.MaxIdleConns = *maxIdleConns
 	opts.IdleTimeoutSec = *idleTimeoutSec
@@ -434,6 +493,7 @@ func normalizeDownloadArgs(args []string) ([]string, error) {
 		"http1":       true,
 		"auto-buffer": true,
 		"queue-mode":  true,
+		"json-events": true,
 	}
 	valueFlags := map[string]bool{
 		"o":                     true,
@@ -558,6 +618,8 @@ func printDownloadUsage(w io.Writer, name string) {
 	fmt.Fprintf(w, "  -buffer-size int\n        download buffer size in bytes (default %d)\n", core.DefaultBufferSizeBytes)
 	fmt.Fprintln(w, "  -auto-buffer")
 	fmt.Fprintln(w, "        auto-tune buffer size for output disk before download")
+	fmt.Fprintln(w, "  -json-events")
+	fmt.Fprintln(w, "        emit newline-delimited JSON progress events to stdout")
 	fmt.Fprintf(w, "  -http1\n        disable HTTP/2 and force HTTP/1.1 behavior (default %t)\n", core.DefaultForceHTTP1)
 	fmt.Fprintf(w, "  -max-idle-conns int\n        max idle connections globally (default %d)\n", core.DefaultMaxIdleConns)
 	fmt.Fprintf(w, "  -idle-timeout int\n        idle connection timeout in seconds (default %d)\n", core.DefaultIdleTimeoutSec)

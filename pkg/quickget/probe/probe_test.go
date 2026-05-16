@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,7 +28,7 @@ func TestFetchRemoteFileStats_ContentLengthValid(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
+	stats, err := FetchRemoteFileStats(context.Background(), srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
 	if err != nil {
 		t.Fatalf("FetchRemoteFileStats returned error: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestFetchRemoteFileStats_ContentLengthMissingIsUnknown(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
+	stats, err := FetchRemoteFileStats(context.Background(), srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
 	if err != nil {
 		t.Fatalf("FetchRemoteFileStats returned error: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestFetchRemoteFileStats_AcceptRangesBytesIsSupported(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
+	stats, err := FetchRemoteFileStats(context.Background(), srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
 	if err != nil {
 		t.Fatalf("FetchRemoteFileStats returned error: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestFetchRemoteFileStats_AcceptRangesOtherOrMissingIsUnsupported(t *testing
 			}))
 			defer srv.Close()
 
-			stats, err := FetchRemoteFileStats(srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
+			stats, err := FetchRemoteFileStats(context.Background(), srv.Client(), srv.URL, nil, DefaultUserAgent, testApplyHeaders)
 			if err != nil {
 				t.Fatalf("FetchRemoteFileStats returned error: %v", err)
 			}

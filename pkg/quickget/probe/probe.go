@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"fmt"
 	"mime"
 	"net/http"
@@ -50,8 +51,8 @@ type ServerProbeResult struct {
 
 type HeaderApplier func(req *http.Request, headers http.Header, userAgent string)
 
-func FetchRemoteFileStats(client *http.Client, rawURL string, headers http.Header, userAgent string, applyHeaders HeaderApplier) (RemoteFileStats, error) {
-	req, err := http.NewRequest(http.MethodHead, rawURL, nil)
+func FetchRemoteFileStats(ctx context.Context, client *http.Client, rawURL string, headers http.Header, userAgent string, applyHeaders HeaderApplier) (RemoteFileStats, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
 	if err != nil {
 		return RemoteFileStats{}, err
 	}
@@ -80,8 +81,8 @@ func FetchRemoteFileStats(client *http.Client, rawURL string, headers http.Heade
 	}, nil
 }
 
-func FetchURLInfo(client *http.Client, rawURL string, headers http.Header, userAgent string, applyHeaders HeaderApplier) (URLInfo, error) {
-	stats, err := FetchRemoteFileStats(client, rawURL, headers, userAgent, applyHeaders)
+func FetchURLInfo(ctx context.Context, client *http.Client, rawURL string, headers http.Header, userAgent string, applyHeaders HeaderApplier) (URLInfo, error) {
+	stats, err := FetchRemoteFileStats(ctx, client, rawURL, headers, userAgent, applyHeaders)
 	if err != nil {
 		return URLInfo{}, err
 	}
@@ -99,13 +100,13 @@ func FetchURLInfo(client *http.Client, rawURL string, headers http.Header, userA
 	}, nil
 }
 
-func ProbeServer(rawURL string, client *http.Client, applyHeaders HeaderApplier) (*ServerProbeResult, error) {
+func ProbeServer(ctx context.Context, rawURL string, client *http.Client, applyHeaders HeaderApplier) (*ServerProbeResult, error) {
 	validatedURL, err := ValidateURL(rawURL)
 	if err != nil {
 		return nil, err
 	}
 
-	stats, err := FetchRemoteFileStats(client, validatedURL, nil, DefaultUserAgent, applyHeaders)
+	stats, err := FetchRemoteFileStats(ctx, client, validatedURL, nil, DefaultUserAgent, applyHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +121,7 @@ func ProbeServer(rawURL string, client *http.Client, applyHeaders HeaderApplier)
 		SuggestedConnections: 2,
 	}
 
-	rangeReq, err := http.NewRequest(http.MethodGet, stats.FinalURL, nil)
+	rangeReq, err := http.NewRequestWithContext(ctx, http.MethodGet, stats.FinalURL, nil)
 	if err != nil {
 		return nil, err
 	}

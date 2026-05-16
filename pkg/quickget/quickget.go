@@ -68,7 +68,7 @@ func Inspect(rawURL string, client *http.Client) (InspectResult, error) {
 	if err != nil {
 		return InspectResult{}, err
 	}
-	return probe.FetchURLInfo(client, validatedURL, nil, core.DefaultUserAgent, core.ApplyHeaders)
+	return probe.FetchURLInfo(context.Background(), client, validatedURL, nil, core.DefaultUserAgent, core.ApplyHeaders)
 }
 
 func FileStats(rawURL string, client *http.Client) (FileStatsResult, error) {
@@ -79,14 +79,14 @@ func FileStats(rawURL string, client *http.Client) (FileStatsResult, error) {
 	if err != nil {
 		return FileStatsResult{}, err
 	}
-	return probe.FetchRemoteFileStats(client, validatedURL, nil, core.DefaultUserAgent, core.ApplyHeaders)
+	return probe.FetchRemoteFileStats(context.Background(), client, validatedURL, nil, core.DefaultUserAgent, core.ApplyHeaders)
 }
 
 func ServerTest(rawURL string, client *http.Client) (ServerTestResult, error) {
 	if client == nil {
 		client = core.NewHTTPClient(1, core.DefaultForceHTTP1, core.DefaultMaxIdleConns, core.DefaultIdleTimeoutSec)
 	}
-	res, err := probe.ProbeServer(rawURL, client, core.ApplyHeaders)
+	res, err := probe.ProbeServer(context.Background(), rawURL, client, core.ApplyHeaders)
 	if err != nil {
 		return ServerTestResult{}, err
 	}
