@@ -1,6 +1,6 @@
-﻿# FastGet Documentation
+# QuickGet Documentation
 
-FastGet is the repository, and `quickget` is the CLI binary. It is a resumable, parallel downloader built in Go for large files and unstable networks.
+QuickGet is the repository, and `quickget` is the CLI binary. It is a resumable, parallel downloader built in Go for large files and unstable networks.
 
 ## What You Can Do With QuickGet
 

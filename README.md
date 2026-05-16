@@ -1,4 +1,4 @@
-﻿# QuickGet
+# QuickGet
 
 <!-- Replace KingHacker9000 with your GitHub username or org, e.g. ashishajin/quickget -->
 [![CI](https://github.com/KingHacker9000/quickget/actions/workflows/ci.yml/badge.svg)](https://github.com/KingHacker9000/quickget/actions/workflows/ci.yml)
@@ -135,7 +135,7 @@ If a download is interrupted, rerun the same command to continue. Delete the man
 ## Repository Structure
 
 ```text
-FastGet/
+QuickGet/
 |-- cmd/
 |   `-- quickget/
 |       `-- main.go                 # CLI entrypoint

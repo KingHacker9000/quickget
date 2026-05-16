@@ -1,4 +1,4 @@
-﻿# Use Cases
+# Use Cases
 
 This page focuses on realistic command patterns you can reuse.
 
@@ -20,7 +20,7 @@ Why this works:
 quickget.exe download \
   -o private.pkg \
   -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "X-Client: FastGet" \
+  -H "X-Client: QuickGet" \
   -user-agent "Mozilla/5.0 QuickGet" \
   https://example.com/private.pkg
 ```
