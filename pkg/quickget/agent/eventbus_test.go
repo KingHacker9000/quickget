@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ func TestEventBusSubscriberReceivesPublishedEvent(t *testing.T) {
 
 	select {
 	case got := <-ch:
-		if got != event {
+		if !reflect.DeepEqual(got, event) {
 			t.Fatalf("unexpected event: got %+v want %+v", got, event)
 		}
 	case <-time.After(500 * time.Millisecond):
@@ -52,7 +53,7 @@ func TestEventBusMultipleSubscribersReceiveEvents(t *testing.T) {
 	for i, ch := range []<-chan events.Event{ch1, ch2} {
 		select {
 		case got := <-ch:
-			if got != event {
+			if !reflect.DeepEqual(got, event) {
 				t.Fatalf("subscriber %d unexpected event: got %+v want %+v", i+1, got, event)
 			}
 		case <-time.After(500 * time.Millisecond):

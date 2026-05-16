@@ -370,7 +370,7 @@ func preallocateFile(outputPath string, size int64) error {
 	return f.Truncate(size)
 }
 
-func downloadSegment(ctx context.Context, client *http.Client, rawURL string, outputPath string, task manifest.SegmentTask, downloaded *int64, chunkDownloaded *int64, bufPool *sync.Pool, stats *progress.DownloadStats, headers http.Header, userAgent string) error {
+func downloadSegment(ctx context.Context, client *http.Client, rawURL string, outputPath string, task manifest.SegmentTask, downloaded *int64, chunkDownloaded *int64, bufPool *sync.Pool, stats *progress.DownloadStats, headers http.Header, userAgent string, mutations *int64) error {
 	if task.End < task.Start {
 		return fmt.Errorf("invalid range %d-%d", task.Start, task.End)
 	}
@@ -420,6 +420,9 @@ func downloadSegment(ctx context.Context, client *http.Client, rawURL string, ou
 			offset += int64(written)
 			atomic.AddInt64(downloaded, int64(written))
 			atomic.AddInt64(chunkDownloaded, int64(written))
+			if mutations != nil {
+				atomic.AddInt64(mutations, 1)
+			}
 		}
 
 		if readErr == io.EOF {
@@ -433,7 +436,7 @@ func downloadSegment(ctx context.Context, client *http.Client, rawURL string, ou
 	return nil
 }
 
-func downloadSegmentWithRetry(ctx context.Context, client *http.Client, rawURL string, outputPath string, task manifest.SegmentTask, downloaded *int64, chunkDownloaded *int64, maxRetries int, bufPool *sync.Pool, stats *progress.DownloadStats, headers http.Header, userAgent string) error {
+func downloadSegmentWithRetry(ctx context.Context, client *http.Client, rawURL string, outputPath string, task manifest.SegmentTask, downloaded *int64, chunkDownloaded *int64, maxRetries int, bufPool *sync.Pool, stats *progress.DownloadStats, headers http.Header, userAgent string, mutations *int64) error {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -442,7 +445,7 @@ func downloadSegmentWithRetry(ctx context.Context, client *http.Client, rawURL s
 		if attempt > 0 {
 			time.Sleep(time.Second)
 		}
-		err := downloadSegment(ctx, client, rawURL, outputPath, task, downloaded, chunkDownloaded, bufPool, stats, headers, userAgent)
+		err := downloadSegment(ctx, client, rawURL, outputPath, task, downloaded, chunkDownloaded, bufPool, stats, headers, userAgent, mutations)
 		if err == nil {
 			return nil
 		}
@@ -475,7 +478,8 @@ func downloadSingle(ctx context.Context, client *http.Client, rawURL string, out
 	defer outFile.Close()
 
 	var downloaded int64
-	progressDone, progressFinished := progress.StartProgressLoop(out, &downloaded, totalSize, reporter, nil, progressIntervalMs)
+	var mutations int64
+	progressDone, progressFinished := progress.StartProgressLoop(out, &downloaded, totalSize, reporter, nil, progressIntervalMs, nil, &mutations, nil)
 	defer func() {
 		close(progressDone)
 		<-progressFinished
@@ -490,6 +494,7 @@ func downloadSingle(ctx context.Context, client *http.Client, rawURL string, out
 				return writeErr
 			}
 			atomic.AddInt64(&downloaded, int64(written))
+			atomic.AddInt64(&mutations, 1)
 		}
 		if readErr == io.EOF {
 			break
@@ -531,7 +536,8 @@ func downloadSingleRange(ctx context.Context, client *http.Client, rawURL string
 	defer outFile.Close()
 
 	var downloaded int64
-	progressDone, progressFinished := progress.StartProgressLoop(out, &downloaded, totalSize, reporter, nil, progressIntervalMs)
+	var mutations int64
+	progressDone, progressFinished := progress.StartProgressLoop(out, &downloaded, totalSize, reporter, nil, progressIntervalMs, nil, &mutations, nil)
 	defer func() {
 		close(progressDone)
 		<-progressFinished
@@ -546,6 +552,7 @@ func downloadSingleRange(ctx context.Context, client *http.Client, rawURL string
 				return writeErr
 			}
 			atomic.AddInt64(&downloaded, int64(written))
+			atomic.AddInt64(&mutations, 1)
 		}
 		if readErr == io.EOF {
 			break
@@ -649,18 +656,52 @@ func downloadParallel(ctx context.Context, client *http.Client, rawURL string, o
 	}
 	chunkDownloaded := make([]int64, len(m.Chunks))
 	chunkTotals := make([]int64, len(m.Chunks))
+	activeChunkWorkers := make([]int32, len(m.Chunks))
+	var mutationCount int64
 	for i, c := range m.Chunks {
 		chunkDownloaded[i] = c.DownloadedBytes
 		chunkTotals[i] = manifest.ChunkSize(c)
 		atomic.AddInt64(&downloaded, c.DownloadedBytes)
 	}
 
+	segmentProvider := func() []progress.SegmentSnapshot {
+		segments := make([]progress.SegmentSnapshot, 0, len(m.Chunks))
+		for i, c := range m.Chunks {
+			total := chunkTotals[i]
+			downloaded := atomic.LoadInt64(&chunkDownloaded[i])
+			status := "pending"
+			if total > 0 && downloaded >= total {
+				status = "completed"
+			} else if atomic.LoadInt32(&activeChunkWorkers[i]) > 0 {
+				status = "running"
+			}
+			segments = append(segments, progress.SegmentSnapshot{
+				Index:      c.Index,
+				StartByte:  c.Start,
+				EndByte:    c.End,
+				Downloaded: downloaded,
+				Status:     status,
+			})
+		}
+		return segments
+	}
+
+	activeChunksProvider := func() int {
+		active := 0
+		for i := range activeChunkWorkers {
+			if atomic.LoadInt32(&activeChunkWorkers[i]) > 0 {
+				active++
+			}
+		}
+		return active
+	}
+
 	var progressDone chan struct{}
 	var progressFinished chan struct{}
 	if verbose {
-		progressDone, progressFinished = progress.StartVerboseProgressLoop(out, &downloaded, totalSize, chunkTotals, chunkDownloaded, reporter, writeStats, progressIntervalMs)
+		progressDone, progressFinished = progress.StartVerboseProgressLoop(out, &downloaded, totalSize, chunkTotals, chunkDownloaded, reporter, writeStats, progressIntervalMs, segmentProvider, &mutationCount, activeChunksProvider)
 	} else {
-		progressDone, progressFinished = progress.StartProgressLoop(out, &downloaded, totalSize, reporter, writeStats, progressIntervalMs)
+		progressDone, progressFinished = progress.StartProgressLoop(out, &downloaded, totalSize, reporter, writeStats, progressIntervalMs, segmentProvider, &mutationCount, activeChunksProvider)
 	}
 
 	stopSaver := make(chan struct{})
@@ -698,7 +739,7 @@ func downloadParallel(ctx context.Context, client *http.Client, rawURL string, o
 	}()
 
 	if queueMode {
-		return runQueueMode(ctx, client, rawURL, outputPath, connections, maxRetries, mPath, &m, &manifestMu, &downloaded, chunkDownloaded, stopSaver, saverDone, progressDone, progressFinished, bufPool, writeStats, headers, userAgent, out)
+		return runQueueMode(ctx, client, rawURL, outputPath, connections, maxRetries, mPath, &m, &manifestMu, &downloaded, chunkDownloaded, stopSaver, saverDone, progressDone, progressFinished, bufPool, writeStats, headers, userAgent, out, activeChunkWorkers, &mutationCount)
 	}
 
 	pickTask := func() (manifest.SegmentTask, bool) {
@@ -757,11 +798,14 @@ func downloadParallel(ctx context.Context, client *http.Client, rawURL string, o
 				if !ok {
 					return
 				}
+				atomic.AddInt32(&activeChunkWorkers[task.ChunkIndex], 1)
 
-				if err := downloadSegmentWithRetry(ctx, client, rawURL, outputPath, task, &downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries, bufPool, writeStats, headers, userAgent); err != nil {
+				if err := downloadSegmentWithRetry(ctx, client, rawURL, outputPath, task, &downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries, bufPool, writeStats, headers, userAgent, &mutationCount); err != nil {
+					atomic.AddInt32(&activeChunkWorkers[task.ChunkIndex], -1)
 					errChan <- fmt.Errorf("chunk %d segment %d-%d failed: %w", task.ChunkIndex, task.Start, task.End, err)
 					return
 				}
+				atomic.AddInt32(&activeChunkWorkers[task.ChunkIndex], -1)
 
 				manifestMu.Lock()
 				c := &m.Chunks[task.ChunkIndex]
@@ -813,7 +857,7 @@ func downloadParallel(ctx context.Context, client *http.Client, rawURL string, o
 	return writeStats, nil
 }
 
-func runQueueMode(ctx context.Context, client *http.Client, rawURL string, outputPath string, connections int, maxRetries int, mPath string, m *manifest.DownloadManifest, manifestMu *sync.Mutex, downloaded *int64, chunkDownloaded []int64, stopSaver chan struct{}, saverDone chan struct{}, progressDone chan struct{}, progressFinished chan struct{}, bufPool *sync.Pool, writeStats *progress.DownloadStats, headers http.Header, userAgent string, out io.Writer) (*progress.DownloadStats, error) {
+func runQueueMode(ctx context.Context, client *http.Client, rawURL string, outputPath string, connections int, maxRetries int, mPath string, m *manifest.DownloadManifest, manifestMu *sync.Mutex, downloaded *int64, chunkDownloaded []int64, stopSaver chan struct{}, saverDone chan struct{}, progressDone chan struct{}, progressFinished chan struct{}, bufPool *sync.Pool, writeStats *progress.DownloadStats, headers http.Header, userAgent string, out io.Writer, activeChunkWorkers []int32, mutationCount *int64) (*progress.DownloadStats, error) {
 	taskCh := make(chan manifest.SegmentTask, connections*2)
 	errChan := make(chan error, connections)
 	var workerWG sync.WaitGroup
@@ -826,10 +870,13 @@ func runQueueMode(ctx context.Context, client *http.Client, rawURL string, outpu
 				if err := ctx.Err(); err != nil {
 					return
 				}
-				if err := downloadSegmentWithRetry(ctx, client, rawURL, outputPath, task, downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries, bufPool, writeStats, headers, userAgent); err != nil {
+				atomic.AddInt32(&activeChunkWorkers[task.ChunkIndex], 1)
+				if err := downloadSegmentWithRetry(ctx, client, rawURL, outputPath, task, downloaded, &chunkDownloaded[task.ChunkIndex], maxRetries, bufPool, writeStats, headers, userAgent, mutationCount); err != nil {
+					atomic.AddInt32(&activeChunkWorkers[task.ChunkIndex], -1)
 					errChan <- fmt.Errorf("segment %d (%d-%d) failed: %w", task.ChunkIndex, task.Start, task.End, err)
 					return
 				}
+				atomic.AddInt32(&activeChunkWorkers[task.ChunkIndex], -1)
 
 				manifestMu.Lock()
 				c := &m.Chunks[task.ChunkIndex]

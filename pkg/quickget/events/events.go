@@ -5,6 +5,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"quickget/pkg/quickget/api"
 )
 
 const (
@@ -20,18 +22,22 @@ const (
 )
 
 type Event struct {
-	Type       string    `json:"type"`
-	ID         string    `json:"id"`
-	Timestamp  time.Time `json:"timestamp"`
-	Downloaded int64     `json:"downloaded"`
-	Total      int64     `json:"total"`
-	Percent    float64   `json:"percent"`
-	SpeedMBps  float64   `json:"speedMBps"`
-	AvgMBps    float64   `json:"avgMBps"`
-	Status     string    `json:"status"`
-	Message    string    `json:"message"`
-	Error      string    `json:"error"`
-	Suggestion string    `json:"suggestion"`
+	Type        string                `json:"type"`
+	ID          string                `json:"id"`
+	Timestamp   time.Time             `json:"timestamp"`
+	Downloaded  int64                 `json:"downloaded"`
+	Total       int64                 `json:"total"`
+	Percent     float64               `json:"percent"`
+	SpeedMBps   float64               `json:"speedMBps"`
+	AvgMBps     float64               `json:"avgMBps"`
+	Status      string                `json:"status"`
+	Connections int                   `json:"connections,omitempty"`
+	ActiveJobs  int                   `json:"activeJobs,omitempty"`
+	Mutations   int64                 `json:"mutations,omitempty"`
+	Segments    []api.SegmentProgress `json:"segments,omitempty"`
+	Message     string                `json:"message"`
+	Error       string                `json:"error"`
+	Suggestion  string                `json:"suggestion"`
 }
 
 type Emitter struct {

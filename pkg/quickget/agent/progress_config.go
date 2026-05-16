@@ -10,6 +10,7 @@ import (
 
 const (
 	progressIntervalEnv            = "QDM_AGENT_PROGRESS_INTERVAL_MS"
+	debugProgressEnv               = "QDM_DEBUG_PROGRESS"
 	defaultAgentProgressIntervalMs = 100
 	progressPersistIntervalMs      = 1000
 )
@@ -27,4 +28,9 @@ func readAgentProgressIntervalMs() int {
 		return progress.MinRefreshIntervalMS
 	}
 	return v
+}
+
+func debugProgressEnabled() bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(debugProgressEnv)))
+	return raw == "1" || raw == "true" || raw == "yes"
 }

@@ -21,17 +21,21 @@ const (
 )
 
 type DownloadJob struct {
-	ID         string
-	URL        string
-	OutputPath string
-	Directory  string
-	Status     string
+	ID          string
+	URL         string
+	OutputPath  string
+	Directory   string
+	Status      string
+	Connections int
 
 	Downloaded int64
 	Total      int64
 	Percent    float64
 	SpeedMBps  float64
 	AvgMBps    float64
+	ActiveJobs int
+	Mutations  int64
+	Segments   []api.SegmentProgress
 	Error      string
 	Message    string
 
@@ -60,11 +64,15 @@ func (j *DownloadJob) Snapshot() api.DownloadSnapshot {
 		URL:         j.URL,
 		OutputPath:  j.OutputPath,
 		Status:      j.Status,
+		Connections: j.Connections,
 		Downloaded:  j.Downloaded,
 		Total:       j.Total,
 		Percent:     j.Percent,
 		SpeedMBps:   j.SpeedMBps,
 		AvgMBps:     j.AvgMBps,
+		ActiveJobs:  j.ActiveJobs,
+		Mutations:   j.Mutations,
+		Segments:    append([]api.SegmentProgress(nil), j.Segments...),
 		Error:       j.Error,
 		Message:     j.Message,
 		CreatedAt:   j.CreatedAt,
@@ -90,12 +98,15 @@ func (j *DownloadJob) MarkStatus(status string) {
 	}
 }
 
-func (j *DownloadJob) UpdateProgress(downloaded, total int64, percent, speedMBps, avgMBps float64, message string) {
+func (j *DownloadJob) UpdateProgress(downloaded, total int64, percent, speedMBps, avgMBps float64, message string, activeJobs int, mutations int64, segments []api.SegmentProgress) {
 	j.Downloaded = downloaded
 	j.Total = total
 	j.Percent = percent
 	j.SpeedMBps = speedMBps
 	j.AvgMBps = avgMBps
 	j.Message = message
+	j.ActiveJobs = activeJobs
+	j.Mutations = mutations
+	j.Segments = append(j.Segments[:0], segments...)
 	j.UpdatedAt = time.Now().UTC()
 }

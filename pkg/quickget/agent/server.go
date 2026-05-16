@@ -20,10 +20,13 @@ const (
 )
 
 type Server struct {
-	manager *Manager
-	token   string
-	version string
-	httpSrv *http.Server
+	manager     *Manager
+	token       string
+	version     string
+	apiVersion  string
+	buildCommit string
+	buildDate   string
+	httpSrv     *http.Server
 }
 
 func NewServer(manager *Manager, token string, version string) *Server {
@@ -32,9 +35,10 @@ func NewServer(manager *Manager, token string, version string) *Server {
 	}
 
 	s := &Server{
-		manager: manager,
-		token:   token,
-		version: version,
+		manager:    manager,
+		token:      token,
+		version:    version,
+		apiVersion: "v1",
 	}
 
 	s.httpSrv = &http.Server{
@@ -118,10 +122,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"name":    "quickget-agent",
-		"version": s.version,
+		"ok":           true,
+		"name":         "quickget-agent",
+		"version":      s.version,
+		"api_version":  s.apiVersion,
+		"build_commit": s.buildCommit,
+		"build_date":   s.buildDate,
 	})
+}
+
+func (s *Server) SetBuildInfo(commit, date string) {
+	s.buildCommit = strings.TrimSpace(commit)
+	s.buildDate = strings.TrimSpace(date)
 }
 
 func (s *Server) handleDownloadsCollection(w http.ResponseWriter, r *http.Request) {

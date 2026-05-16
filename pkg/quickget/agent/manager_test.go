@@ -13,6 +13,7 @@ import (
 	"quickget/pkg/quickget/api"
 	"quickget/pkg/quickget/events"
 	"quickget/pkg/quickget/manifest"
+	"quickget/pkg/quickget/progress"
 	"quickget/pkg/quickget/store"
 )
 
@@ -206,7 +207,20 @@ func TestManagerCreateStartsAndCompletes(t *testing.T) {
 
 func TestManagerProgressUpdatesJobState(t *testing.T) {
 	dl := newFakeDownloader()
-	dl.progress = []quickget.DownloadEvent{{Type: "progress", Downloaded: 10, Total: 100, Percent: 10, SpeedMBps: 1.2, AvgMBps: 1.0, Message: "p1"}}
+	dl.progress = []quickget.DownloadEvent{{
+		Type:       "progress",
+		Downloaded: 10,
+		Total:      100,
+		Percent:    10,
+		SpeedMBps:  1.2,
+		AvgMBps:    1.0,
+		Message:    "p1",
+		ActiveJobs: 2,
+		Mutations:  7,
+		Segments: []progress.SegmentSnapshot{
+			{Index: 0, StartByte: 0, EndByte: 49, Downloaded: 10, Status: "running"},
+		},
+	}}
 	st := &fakeStore{}
 	m := newManagerWithFake(t, dl, st)
 
@@ -221,6 +235,12 @@ func TestManagerProgressUpdatesJobState(t *testing.T) {
 	got, _ := m.Get(snap.ID)
 	if got.Downloaded != 10 || got.Total != 100 || got.Percent != 10 || got.Message != "p1" {
 		t.Fatalf("unexpected progress snapshot: %+v", got)
+	}
+	if got.Mutations != 7 || len(got.Segments) != 1 {
+		t.Fatalf("expected segment-rich progress snapshot, got %+v", got)
+	}
+	if got.Segments[0].Status != "completed" {
+		t.Fatalf("expected segment status completed after job completion, got %+v", got.Segments[0])
 	}
 	if !st.hasSavedProgress(snap.ID, 10) {
 		t.Fatalf("expected progress state to be persisted for job %s", snap.ID)

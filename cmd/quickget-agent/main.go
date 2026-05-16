@@ -25,6 +25,12 @@ const (
 	defaultShutdownGrace = 10 * time.Second
 )
 
+var (
+	version     = "dev"
+	buildCommit = ""
+	buildDate   = ""
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage(os.Stderr)
@@ -90,7 +96,8 @@ func runServe(args []string) error {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	srv := agent.NewServer(mgr, tok, "dev")
+	srv := agent.NewServer(mgr, tok, version)
+	srv.SetBuildInfo(buildCommit, buildDate)
 	srv.SetAddr(*addr)
 
 	errCh := make(chan error, 1)

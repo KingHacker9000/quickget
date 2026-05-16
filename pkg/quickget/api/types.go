@@ -27,20 +27,33 @@ type DownloadResponse struct {
 }
 
 type DownloadSnapshot struct {
-	ID          string     `json:"id"`
-	URL         string     `json:"url"`
-	OutputPath  string     `json:"outputPath"`
-	Status      string     `json:"status"`
-	Downloaded  int64      `json:"downloaded"`
-	Total       int64      `json:"total"`
-	Percent     float64    `json:"percent"`
-	SpeedMBps   float64    `json:"speedMBps"`
-	AvgMBps     float64    `json:"avgMBps"`
-	Error       string     `json:"error"`
-	Message     string     `json:"message"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	UpdatedAt   time.Time  `json:"updatedAt"`
-	CompletedAt *time.Time `json:"completedAt"`
+	ID          string            `json:"id"`
+	URL         string            `json:"url"`
+	OutputPath  string            `json:"outputPath"`
+	Status      string            `json:"status"`
+	Connections int               `json:"connections,omitempty"`
+	Downloaded  int64             `json:"downloaded"`
+	Total       int64             `json:"total"`
+	Percent     float64           `json:"percent"`
+	SpeedMBps   float64           `json:"speedMBps"`
+	AvgMBps     float64           `json:"avgMBps"`
+	ActiveJobs  int               `json:"activeJobs,omitempty"`
+	Mutations   int64             `json:"mutations,omitempty"`
+	Segments    []SegmentProgress `json:"segments,omitempty"`
+	Error       string            `json:"error"`
+	Message     string            `json:"message"`
+	CreatedAt   time.Time         `json:"createdAt"`
+	UpdatedAt   time.Time         `json:"updatedAt"`
+	CompletedAt *time.Time        `json:"completedAt"`
+}
+
+type SegmentProgress struct {
+	Index      int    `json:"index"`
+	StartByte  int64  `json:"startByte"`
+	EndByte    int64  `json:"endByte"`
+	Downloaded int64  `json:"downloadedBytesWithinSegment"`
+	Status     string `json:"status"`
+	WorkerID   int    `json:"workerId,omitempty"`
 }
 
 type ErrorResponse struct {

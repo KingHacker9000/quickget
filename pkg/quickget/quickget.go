@@ -54,6 +54,9 @@ type DownloadEvent struct {
 	AvgMBps    float64
 	Message    string
 	Error      string
+	Segments   []progress.SegmentSnapshot
+	Mutations  int64
+	ActiveJobs int
 }
 
 type EventCallback func(DownloadEvent)
@@ -119,6 +122,9 @@ func Download(ctx context.Context, opts DownloadOptions, emit EventCallback) err
 			Percent:    s.Percent,
 			SpeedMBps:  s.SpeedMBps,
 			AvgMBps:    s.SpeedMBps,
+			Segments:   s.Segments,
+			Mutations:  s.Mutations,
+			ActiveJobs: s.ActiveChunks,
 		})
 	}
 

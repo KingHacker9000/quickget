@@ -49,6 +49,7 @@ type Manager struct {
 	store              Store
 	dl                 Downloader
 	progressIntervalMs int
+	debugProgress      bool
 }
 
 func NewManager(store Store) *Manager {
@@ -59,6 +60,7 @@ func NewManager(store Store) *Manager {
 		store:              store,
 		dl:                 coreDownloader{},
 		progressIntervalMs: readAgentProgressIntervalMs(),
+		debugProgress:      debugProgressEnabled(),
 	}
 }
 
@@ -91,14 +93,15 @@ func (m *Manager) CreateDownload(req api.CreateDownloadRequest) (api.DownloadSna
 	coreReq := toCoreRequest(req)
 	resolvedOutputPath := resolveJobOutputPath(coreReq.OutputPath, coreReq.OutputDir)
 	job := &DownloadJob{
-		ID:         NewJobID(),
-		URL:        req.URL,
-		OutputPath: resolvedOutputPath,
-		Directory:  req.Directory,
-		Status:     JobStatusQueued,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		Options:    coreReq,
+		ID:          NewJobID(),
+		URL:         req.URL,
+		OutputPath:  resolvedOutputPath,
+		Directory:   req.Directory,
+		Status:      JobStatusQueued,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Options:     coreReq,
+		Connections: coreReq.Workers,
 	}
 
 	m.mu.Lock()
@@ -298,11 +301,15 @@ func (m *Manager) LoadState() error {
 			OutputPath:  snap.OutputPath,
 			Directory:   filepath.Dir(snap.OutputPath),
 			Status:      status,
+			Connections: snap.Connections,
 			Downloaded:  snap.Downloaded,
 			Total:       snap.Total,
 			Percent:     snap.Percent,
 			SpeedMBps:   snap.SpeedMBps,
 			AvgMBps:     snap.AvgMBps,
+			ActiveJobs:  snap.ActiveJobs,
+			Mutations:   snap.Mutations,
+			Segments:    append([]api.SegmentProgress(nil), snap.Segments...),
 			Error:       snap.Error,
 			Message:     message,
 			CreatedAt:   snap.CreatedAt,
@@ -375,6 +382,12 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 
 	lastProgressSave := time.Time{}
 	savedProgressSnapshot := false
+	lastDebugWindow := time.Now().UTC()
+	var prevDownloaded int64
+	var prevMutations int64
+	var sseEventsThisWindow int64
+	var byteDeltaThisWindow int64
+	var mutationDeltaThisWindow int64
 	err := dl.Download(ctx, req, func(ev quickget.DownloadEvent) {
 		if ev.Type != "progress" {
 			return
@@ -386,12 +399,50 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 			m.mu.Unlock()
 			return
 		}
-		job.UpdateProgress(ev.Downloaded, ev.Total, ev.Percent, ev.SpeedMBps, ev.AvgMBps, ev.Message)
+		segments := make([]api.SegmentProgress, 0, len(ev.Segments))
+		for _, seg := range ev.Segments {
+			segments = append(segments, api.SegmentProgress{
+				Index:      seg.Index,
+				StartByte:  seg.StartByte,
+				EndByte:    seg.EndByte,
+				Downloaded: seg.Downloaded,
+				Status:     seg.Status,
+				WorkerID:   seg.WorkerID,
+			})
+		}
+		job.UpdateProgress(ev.Downloaded, ev.Total, ev.Percent, ev.SpeedMBps, ev.AvgMBps, ev.Message, ev.ActiveJobs, ev.Mutations, segments)
 		snap := job.Snapshot()
 		m.mu.Unlock()
 
 		log.Printf("agent: progress id=%s downloaded=%d total=%d percent=%.2f", id, snap.Downloaded, snap.Total, snap.Percent)
 		m.publishSnapshot(snap, events.EventDownloadProgress, ev.Message, "")
+		sseEventsThisWindow++
+		if prevDownloaded > 0 || prevMutations > 0 {
+			if snap.Downloaded > prevDownloaded {
+				byteDeltaThisWindow += snap.Downloaded - prevDownloaded
+			}
+			if ev.Mutations > prevMutations {
+				mutationDeltaThisWindow += ev.Mutations - prevMutations
+			}
+		}
+		prevDownloaded = snap.Downloaded
+		prevMutations = ev.Mutations
+
+		if m.debugProgress && time.Since(lastDebugWindow) >= time.Second {
+			log.Printf(
+				"agent: progress-debug id=%s snapshot_mutations_per_sec=%d sse_progress_events_per_sec=%d downloaded_bytes_delta=%d active_segments=%d interval_ms=%d",
+				id,
+				mutationDeltaThisWindow,
+				sseEventsThisWindow,
+				byteDeltaThisWindow,
+				ev.ActiveJobs,
+				m.progressIntervalMs,
+			)
+			lastDebugWindow = time.Now().UTC()
+			sseEventsThisWindow = 0
+			byteDeltaThisWindow = 0
+			mutationDeltaThisWindow = 0
+		}
 		now := time.Now().UTC()
 		if !savedProgressSnapshot || now.Sub(lastProgressSave) >= time.Duration(progressPersistIntervalMs)*time.Millisecond {
 			_ = m.SaveState()
@@ -420,22 +471,48 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 	if err == nil {
 		job.MarkStatus(JobStatusCompleted)
 		job.Error = ""
+		for i := range job.Segments {
+			job.Segments[i].Status = "completed"
+			segmentSize := job.Segments[i].EndByte - job.Segments[i].StartByte + 1
+			if segmentSize > 0 {
+				job.Segments[i].Downloaded = segmentSize
+			}
+		}
+		job.ActiveJobs = 0
 		eventType = events.EventDownloadCompleted
 		message = "download completed"
 		log.Printf("agent: completed job id=%s downloaded=%d total=%d output=%s", id, job.Downloaded, job.Total, job.OutputPath)
 	} else if pauseRequested {
 		job.MarkStatus(JobStatusPaused)
+		for i := range job.Segments {
+			if job.Segments[i].Status == "running" {
+				job.Segments[i].Status = "paused"
+			}
+		}
+		job.ActiveJobs = 0
 		eventType = events.EventDownloadPaused
 		message = "download paused"
 		log.Printf("agent: paused job id=%s", id)
 	} else if cancelRequested {
 		job.MarkStatus(JobStatusCancelled)
+		for i := range job.Segments {
+			if job.Segments[i].Status != "completed" {
+				job.Segments[i].Status = "cancelled"
+			}
+		}
+		job.ActiveJobs = 0
 		eventType = events.EventDownloadCancelled
 		message = "download cancelled"
 		log.Printf("agent: cancelled job id=%s", id)
 	} else {
 		job.MarkStatus(JobStatusFailed)
 		job.Error = err.Error()
+		for i := range job.Segments {
+			if job.Segments[i].Status != "completed" {
+				job.Segments[i].Status = "failed"
+			}
+		}
+		job.ActiveJobs = 0
 		eventType = events.EventDownloadFailed
 		message = "download failed"
 		errText = err.Error()
@@ -458,17 +535,21 @@ func (m *Manager) publish(job *DownloadJob, eventType, msg, errText string) {
 
 func (m *Manager) publishSnapshot(s api.DownloadSnapshot, eventType, msg, errText string) {
 	m.bus.Publish(events.Event{
-		Type:       eventType,
-		ID:         s.ID,
-		Timestamp:  time.Now().UTC(),
-		Downloaded: s.Downloaded,
-		Total:      s.Total,
-		Percent:    s.Percent,
-		SpeedMBps:  s.SpeedMBps,
-		AvgMBps:    s.AvgMBps,
-		Status:     s.Status,
-		Message:    msg,
-		Error:      errText,
+		Type:        eventType,
+		ID:          s.ID,
+		Timestamp:   time.Now().UTC(),
+		Downloaded:  s.Downloaded,
+		Total:       s.Total,
+		Percent:     s.Percent,
+		SpeedMBps:   s.SpeedMBps,
+		AvgMBps:     s.AvgMBps,
+		Status:      s.Status,
+		Connections: s.Connections,
+		ActiveJobs:  s.ActiveJobs,
+		Mutations:   s.Mutations,
+		Segments:    append([]api.SegmentProgress(nil), s.Segments...),
+		Message:     msg,
+		Error:       errText,
 	})
 }
 

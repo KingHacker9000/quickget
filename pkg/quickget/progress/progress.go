@@ -25,6 +25,18 @@ type Snapshot struct {
 	Percent      float64
 	Elapsed      time.Duration
 	WritePercent float64
+	Segments     []SegmentSnapshot
+	Mutations    int64
+	ActiveChunks int
+}
+
+type SegmentSnapshot struct {
+	Index      int
+	StartByte  int64
+	EndByte    int64
+	Downloaded int64
+	Status     string
+	WorkerID   int
 }
 
 type Reporter func(s Snapshot)
@@ -75,7 +87,17 @@ func sanitizeIntervalMS(intervalMs int) int {
 	return intervalMs
 }
 
-func StartProgressLoop(w io.Writer, downloaded *int64, totalSize int64, reporter Reporter, writeStats *DownloadStats, intervalMs int) (chan struct{}, chan struct{}) {
+func StartProgressLoop(
+	w io.Writer,
+	downloaded *int64,
+	totalSize int64,
+	reporter Reporter,
+	writeStats *DownloadStats,
+	intervalMs int,
+	segmentsProvider func() []SegmentSnapshot,
+	mutationsCounter *int64,
+	activeChunksProvider func() int,
+) (chan struct{}, chan struct{}) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	start := time.Now()
@@ -90,11 +112,11 @@ func StartProgressLoop(w io.Writer, downloaded *int64, totalSize int64, reporter
 			case <-ticker.C:
 				current := atomic.LoadInt64(downloaded)
 				renderProgress(w, current, totalSize, start)
-				reportSnapshot(reporter, current, totalSize, start, writeStats)
+				reportSnapshot(reporter, current, totalSize, start, writeStats, segmentsProvider, mutationsCounter, activeChunksProvider)
 			case <-done:
 				current := atomic.LoadInt64(downloaded)
 				renderProgress(w, current, totalSize, start)
-				reportSnapshot(reporter, current, totalSize, start, writeStats)
+				reportSnapshot(reporter, current, totalSize, start, writeStats, segmentsProvider, mutationsCounter, activeChunksProvider)
 				fmt.Fprintln(w)
 				return
 			}
@@ -103,7 +125,19 @@ func StartProgressLoop(w io.Writer, downloaded *int64, totalSize int64, reporter
 	return done, finished
 }
 
-func StartVerboseProgressLoop(w io.Writer, downloaded *int64, totalSize int64, chunkTotals []int64, chunkDownloaded []int64, reporter Reporter, writeStats *DownloadStats, intervalMs int) (chan struct{}, chan struct{}) {
+func StartVerboseProgressLoop(
+	w io.Writer,
+	downloaded *int64,
+	totalSize int64,
+	chunkTotals []int64,
+	chunkDownloaded []int64,
+	reporter Reporter,
+	writeStats *DownloadStats,
+	intervalMs int,
+	segmentsProvider func() []SegmentSnapshot,
+	mutationsCounter *int64,
+	activeChunksProvider func() int,
+) (chan struct{}, chan struct{}) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	start := time.Now()
@@ -159,7 +193,7 @@ func StartVerboseProgressLoop(w io.Writer, downloaded *int64, totalSize int64, c
 				fmt.Fprintf(w, "[C%02d] [%s] %5.1f%% %.2f/%.2f MB\n", i, bar, percent, float64(chunkVal)/1024/1024, float64(chunkTotals[i])/1024/1024)
 			}
 
-			reportSnapshot(reporter, currentTotal, totalSize, start, writeStats)
+			reportSnapshot(reporter, currentTotal, totalSize, start, writeStats, segmentsProvider, mutationsCounter, activeChunksProvider)
 			firstRender = false
 			if final {
 				fmt.Fprintln(w)
@@ -180,7 +214,16 @@ func StartVerboseProgressLoop(w io.Writer, downloaded *int64, totalSize int64, c
 	return done, finished
 }
 
-func reportSnapshot(reporter Reporter, downloaded, total int64, start time.Time, writeStats *DownloadStats) {
+func reportSnapshot(
+	reporter Reporter,
+	downloaded,
+	total int64,
+	start time.Time,
+	writeStats *DownloadStats,
+	segmentsProvider func() []SegmentSnapshot,
+	mutationsCounter *int64,
+	activeChunksProvider func() int,
+) {
 	if reporter == nil {
 		return
 	}
@@ -202,6 +245,15 @@ func reportSnapshot(reporter Reporter, downloaded, total int64, start time.Time,
 		SpeedMBps:  float64(downloaded) / 1024 / 1024 / elapsedSec,
 		Percent:    percent,
 		Elapsed:    elapsed,
+	}
+	if segmentsProvider != nil {
+		s.Segments = segmentsProvider()
+	}
+	if mutationsCounter != nil {
+		s.Mutations = atomic.LoadInt64(mutationsCounter)
+	}
+	if activeChunksProvider != nil {
+		s.ActiveChunks = activeChunksProvider()
 	}
 	if writeStats != nil {
 		s.WritePercent = writeStats.WritePercentApprox()
