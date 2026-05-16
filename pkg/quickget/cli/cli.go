@@ -71,6 +71,7 @@ func runDownload(args []string, stdout io.Writer, stderr io.Writer, binName stri
 	normalized, err := normalizeDownloadArgs(args)
 	if err != nil {
 		printDownloadUsage(stderr, binName)
+		emitJSONTerminalErrorIfEnabled(stdout, args, err)
 		return err
 	}
 
@@ -79,6 +80,7 @@ func runDownload(args []string, stdout io.Writer, stderr io.Writer, binName stri
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
+		emitJSONTerminalErrorIfEnabled(stdout, normalized, err)
 		return err
 	}
 	if !options.JsonEvents {
@@ -140,6 +142,33 @@ func runDownload(args []string, stdout io.Writer, stderr io.Writer, binName stri
 		"size":   res.Size,
 	})
 	return nil
+}
+
+func emitJSONTerminalErrorIfEnabled(stdout io.Writer, args []string, err error) {
+	if !hasJSONEventsArg(args) {
+		return
+	}
+	emitter := events.NewEmitter(stdout)
+	if ExitCodeForError(err) == ExitCancelled {
+		_ = emitter.Emit(map[string]any{
+			"type":    "cancelled",
+			"message": "download cancelled; resume state saved",
+		})
+		return
+	}
+	_ = emitter.Emit(map[string]any{
+		"type":    "error",
+		"message": err.Error(),
+	})
+}
+
+func hasJSONEventsArg(args []string) bool {
+	for _, arg := range args {
+		if arg == "-json-events" || arg == "--json-events" || arg == "-json-events=true" || arg == "--json-events=true" {
+			return true
+		}
+	}
+	return false
 }
 
 func parseDownloadOptions(args []string, stderr io.Writer, binName string) (core.Request, error) {
