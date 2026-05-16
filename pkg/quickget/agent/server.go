@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"quickget/pkg/quickget/api"
+	"quickget/pkg/quickget/events"
 )
 
 const (
@@ -114,6 +116,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(r.URL.Path, "/downloads/") {
 		s.handleDownloadsItem(w, r)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/debug/downloads/") {
+		s.handleDebugLiveDownload(w, r)
 		return
 	}
 
@@ -259,7 +266,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
@@ -270,10 +277,25 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(": connected\n\n"))
 	flusher.Flush()
 
+	heartbeatTicker := time.NewTicker(12 * time.Second)
+	defer heartbeatTicker.Stop()
+	debugEnabled := debugProgressEnabled()
+	debugWindowStart := time.Now().UTC()
+	var progressWritten int64
+	var eventsWritten int64
+	var flushCount int64
+	var segmentCount int64
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-heartbeatTicker.C:
+			if _, err := w.Write([]byte(": ping\n\n")); err != nil {
+				return
+			}
+			flusher.Flush()
+			flushCount++
 		case ev, ok := <-eventsCh:
 			if !ok {
 				return
@@ -293,8 +315,61 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
+			flushCount++
+			eventsWritten++
+			if ev.Type == events.EventDownloadProgress {
+				progressWritten++
+				segmentCount += int64(len(ev.Segments))
+			}
+			if debugEnabled && time.Since(debugWindowStart) >= time.Second {
+				log.Printf(
+					"agent: sse-debug events_written_per_sec=%d progress_written_per_sec=%d flushes_per_sec=%d avg_segments_per_progress=%.2f",
+					eventsWritten,
+					progressWritten,
+					flushCount,
+					func() float64 {
+						if progressWritten == 0 {
+							return 0
+						}
+						return float64(segmentCount) / float64(progressWritten)
+					}(),
+				)
+				debugWindowStart = time.Now().UTC()
+				progressWritten = 0
+				eventsWritten = 0
+				flushCount = 0
+				segmentCount = 0
+			}
 		}
 	}
+}
+
+func (s *Server) handleDebugLiveDownload(w http.ResponseWriter, r *http.Request) {
+	if !debugProgressEnabled() {
+		writeError(w, http.StatusNotFound, "not_found", "route not found")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, http.MethodGet)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/debug/downloads/")
+	if rest == "" {
+		writeError(w, http.StatusNotFound, "not_found", "route not found")
+		return
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || parts[1] != "live" {
+		writeError(w, http.StatusNotFound, "not_found", "route not found")
+		return
+	}
+	id := parts[0]
+	snap, ok := s.manager.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found", "download not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
 }
 
 func writeManagerError(w http.ResponseWriter, err error) {

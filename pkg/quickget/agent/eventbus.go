@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"log"
 	"sync"
+	"time"
 
 	"quickget/pkg/quickget/events"
 )
@@ -12,11 +14,24 @@ type EventBus struct {
 	mu          sync.RWMutex
 	subscribers map[chan events.Event]struct{}
 	closed      bool
+	debug       bool
+	debugMu     sync.Mutex
+	debugWindow eventBusDebugWindow
+}
+
+type eventBusDebugWindow struct {
+	start             time.Time
+	published         int64
+	progressPublished int64
+	subscriberWrites  int64
+	dropped           int64
 }
 
 func NewEventBus() *EventBus {
 	return &EventBus{
 		subscribers: make(map[chan events.Event]struct{}),
+		debug:       debugProgressEnabled(),
+		debugWindow: eventBusDebugWindow{start: time.Now().UTC()},
 	}
 }
 
@@ -60,13 +75,47 @@ func (b *EventBus) Publish(event events.Event) {
 	}
 	b.mu.RUnlock()
 
+	var writes int64
+	var dropped int64
 	for _, ch := range snapshot {
 		select {
 		case ch <- event:
+			writes++
 		default:
 			// Drop events for slow subscribers to avoid blocking publishers.
+			dropped++
 		}
 	}
+	b.debugRecord(event, writes, dropped)
+}
+
+func (b *EventBus) debugRecord(event events.Event, writes int64, dropped int64) {
+	if !b.debug {
+		return
+	}
+	b.debugMu.Lock()
+	defer b.debugMu.Unlock()
+	if b.debugWindow.start.IsZero() {
+		b.debugWindow.start = time.Now().UTC()
+	}
+	b.debugWindow.published++
+	if event.Type == events.EventDownloadProgress {
+		b.debugWindow.progressPublished++
+	}
+	b.debugWindow.subscriberWrites += writes
+	b.debugWindow.dropped += dropped
+
+	if time.Since(b.debugWindow.start) < time.Second {
+		return
+	}
+	log.Printf(
+		"agent: bus-debug published_per_sec=%d progress_published_per_sec=%d subscriber_writes_per_sec=%d dropped_per_sec=%d",
+		b.debugWindow.published,
+		b.debugWindow.progressPublished,
+		b.debugWindow.subscriberWrites,
+		b.debugWindow.dropped,
+	)
+	b.debugWindow = eventBusDebugWindow{start: time.Now().UTC()}
 }
 
 func (b *EventBus) Close() {

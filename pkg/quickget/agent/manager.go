@@ -385,9 +385,10 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 	lastDebugWindow := time.Now().UTC()
 	var prevDownloaded int64
 	var prevMutations int64
-	var sseEventsThisWindow int64
+	var publishedProgressEventsThisWindow int64
 	var byteDeltaThisWindow int64
 	var mutationDeltaThisWindow int64
+	var debugSampleCount int
 	err := dl.Download(ctx, req, func(ev quickget.DownloadEvent) {
 		if ev.Type != "progress" {
 			return
@@ -413,10 +414,32 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 		job.UpdateProgress(ev.Downloaded, ev.Total, ev.Percent, ev.SpeedMBps, ev.AvgMBps, ev.Message, ev.ActiveJobs, ev.Mutations, segments)
 		snap := job.Snapshot()
 		m.mu.Unlock()
+		if m.debugProgress && debugSampleCount < 5 {
+			firstSegment := "none"
+			if len(segments) > 0 {
+				firstSegment = fmt.Sprintf(
+					"idx=%d %d-%d dl=%d status=%s",
+					segments[0].Index,
+					segments[0].StartByte,
+					segments[0].EndByte,
+					segments[0].Downloaded,
+					segments[0].Status,
+				)
+			}
+			log.Printf(
+				"agent: snapshot-updated id=%s downloaded=%d total=%d segments=%d first_segment=%s",
+				id,
+				snap.Downloaded,
+				snap.Total,
+				len(segments),
+				firstSegment,
+			)
+			debugSampleCount++
+		}
 
 		log.Printf("agent: progress id=%s downloaded=%d total=%d percent=%.2f", id, snap.Downloaded, snap.Total, snap.Percent)
 		m.publishSnapshot(snap, events.EventDownloadProgress, ev.Message, "")
-		sseEventsThisWindow++
+		publishedProgressEventsThisWindow++
 		if prevDownloaded > 0 || prevMutations > 0 {
 			if snap.Downloaded > prevDownloaded {
 				byteDeltaThisWindow += snap.Downloaded - prevDownloaded
@@ -433,13 +456,13 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 				"agent: progress-debug id=%s snapshot_mutations_per_sec=%d sse_progress_events_per_sec=%d downloaded_bytes_delta=%d active_segments=%d interval_ms=%d",
 				id,
 				mutationDeltaThisWindow,
-				sseEventsThisWindow,
+				publishedProgressEventsThisWindow,
 				byteDeltaThisWindow,
 				ev.ActiveJobs,
 				m.progressIntervalMs,
 			)
 			lastDebugWindow = time.Now().UTC()
-			sseEventsThisWindow = 0
+			publishedProgressEventsThisWindow = 0
 			byteDeltaThisWindow = 0
 			mutationDeltaThisWindow = 0
 		}
