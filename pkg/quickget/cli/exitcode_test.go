@@ -34,4 +34,3 @@ func TestExitCodeForError(t *testing.T) {
 		})
 	}
 }
-

@@ -9,15 +9,15 @@ import (
 )
 
 const (
-	ExitSuccess               = 0
-	ExitGeneralRuntimeError   = 1
-	ExitInvalidArguments      = 2
-	ExitServerBehaviorError   = 3
-	ExitNetworkFailure        = 4
-	ExitDiskFailure           = 5
-	ExitCancelled             = 6
-	ExitManifestResumeError   = 7
-	ExitVerificationMismatch  = 8
+	ExitSuccess              = 0
+	ExitGeneralRuntimeError  = 1
+	ExitInvalidArguments     = 2
+	ExitServerBehaviorError  = 3
+	ExitNetworkFailure       = 4
+	ExitDiskFailure          = 5
+	ExitCancelled            = 6
+	ExitManifestResumeError  = 7
+	ExitVerificationMismatch = 8
 )
 
 func ExitCodeForError(err error) int {
