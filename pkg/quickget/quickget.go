@@ -3,9 +3,12 @@ package quickget
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"quickget/pkg/quickget/core"
 	"quickget/pkg/quickget/hash"
@@ -19,6 +22,42 @@ type DownloadRequest struct {
 	Options  core.Request
 	Reporter progress.Reporter
 }
+
+type DownloadOptions struct {
+	URL                string
+	OutputPath         string
+	Directory          string
+	Connections        int
+	Retries            int
+	QueueMode          bool
+	SegmentSize        int64
+	BufferSize         int
+	AutoBuffer         bool
+	HTTP1              bool
+	MaxIdleConns       int
+	IdleTimeoutSeconds int
+	Headers            map[string]string
+	UserAgent          string
+	Dynamic            bool
+	MinSplitSize       int64
+	MinDynamicFileSize int64
+	WriteDisk          string
+}
+
+type DownloadEvent struct {
+	Type       string
+	Downloaded int64
+	Total      int64
+	Percent    float64
+	SpeedMBps  float64
+	AvgMBps    float64
+	Message    string
+	Error      string
+}
+
+type EventCallback func(DownloadEvent)
+
+var ErrDownloadCancelled = errors.New("download cancelled")
 
 type DownloadResult = core.Result
 
@@ -54,10 +93,131 @@ type ManifestCleanResult struct {
 	ManifestWasMissing bool
 }
 
-func Download(ctx context.Context, req DownloadRequest) (DownloadResult, error) {
+func DownloadWithRequest(ctx context.Context, req DownloadRequest) (DownloadResult, error) {
 	opts := req.Options
 	opts.ProgressReporter = req.Reporter
 	return core.Download(ctx, opts)
+}
+
+func Download(ctx context.Context, opts DownloadOptions, emit EventCallback) error {
+	if emit != nil {
+		emit(DownloadEvent{
+			Type:    "start",
+			Message: "download started",
+		})
+	}
+
+	reporter := func(s progress.Snapshot) {
+		if emit == nil {
+			return
+		}
+		emit(DownloadEvent{
+			Type:       "progress",
+			Downloaded: s.Downloaded,
+			Total:      s.Total,
+			Percent:    s.Percent,
+			SpeedMBps:  s.SpeedMBps,
+			AvgMBps:    s.SpeedMBps,
+		})
+	}
+
+	req := DownloadRequest{
+		Options:  toCoreRequest(opts),
+		Reporter: reporter,
+	}
+	res, err := DownloadWithRequest(ctx, req)
+	if err != nil {
+		if isCancellationError(err) {
+			if emit != nil {
+				emit(DownloadEvent{
+					Type:    "cancelled",
+					Message: "download cancelled; resume state saved",
+					Error:   err.Error(),
+				})
+			}
+			return fmt.Errorf("%w: %w", ErrDownloadCancelled, context.Canceled)
+		}
+		if emit != nil {
+			emit(DownloadEvent{
+				Type:  "error",
+				Error: err.Error(),
+			})
+		}
+		return err
+	}
+
+	if emit != nil {
+		emit(DownloadEvent{
+			Type:    "complete",
+			Total:   res.Size,
+			Message: res.OutputPath,
+		})
+	}
+	return nil
+}
+
+func toCoreRequest(opts DownloadOptions) core.Request {
+	req := core.DefaultRequest()
+	req.URL = strings.TrimSpace(opts.URL)
+	if output := strings.TrimSpace(opts.OutputPath); output != "" {
+		req.OutputPath = output
+	}
+	if dir := strings.TrimSpace(opts.Directory); dir != "" {
+		req.OutputDir = dir
+	}
+	if opts.Connections > 0 {
+		req.Workers = opts.Connections
+	}
+	if opts.Retries > 0 {
+		req.Retries = opts.Retries
+	}
+	req.QueueMode = opts.QueueMode
+	if opts.SegmentSize > 0 {
+		req.SegmentSize = opts.SegmentSize
+	}
+	if opts.BufferSize > 0 {
+		req.BufferSize = opts.BufferSize
+		req.BufferSizeSet = true
+	}
+	req.AutoBuffer = opts.AutoBuffer
+	if opts.HTTP1 {
+		req.ForceHTTP1 = true
+	}
+	if opts.MaxIdleConns > 0 {
+		req.MaxIdleConns = opts.MaxIdleConns
+	}
+	if opts.IdleTimeoutSeconds > 0 {
+		req.IdleTimeoutSec = opts.IdleTimeoutSeconds
+	}
+	if userAgent := strings.TrimSpace(opts.UserAgent); userAgent != "" {
+		req.UserAgent = userAgent
+	}
+	req.Dynamic = opts.Dynamic
+	if opts.MinSplitSize > 0 {
+		req.MinSplitSize = opts.MinSplitSize
+	}
+	if opts.MinDynamicFileSize > 0 {
+		req.MinDynamicFileSize = opts.MinDynamicFileSize
+	}
+	if writeDisk := strings.TrimSpace(opts.WriteDisk); writeDisk != "" {
+		req.WriteDisk = writeDisk
+	}
+	req.Stdout = io.Discard
+	req.Headers = make(http.Header)
+	for k, v := range opts.Headers {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		req.Headers.Set(k, v)
+	}
+	return req
+}
+
+func isCancellationError(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "download cancelled")
 }
 
 func Inspect(rawURL string, client *http.Client) (InspectResult, error) {

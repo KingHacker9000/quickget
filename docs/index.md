@@ -23,6 +23,14 @@ QuickGet is the repository, and `quickget` is the CLI binary. It is a resumable,
 3. Explore [Use Cases](use-cases.md) for practical workflows.
 4. Go to [Deep Dive](deep-dive/architecture.md) for internals.
 
+## Agent Preview Docs
+
+- [Agent Architecture](agent-architecture.md)
+- [Agent API](agent-api.md)
+- [Desktop Engine Contract](desktop-engine-contract.md)
+
+`quickget-agent` is optional and experimental. Most users should continue with the `quickget` CLI.
+
 ## Project Snapshot
 
 - Language: Go
