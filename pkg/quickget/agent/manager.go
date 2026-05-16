@@ -42,21 +42,23 @@ type runControl struct {
 }
 
 type Manager struct {
-	mu      sync.RWMutex
-	jobs    map[string]*DownloadJob
-	running map[string]*runControl
-	bus     *EventBus
-	store   Store
-	dl      Downloader
+	mu                 sync.RWMutex
+	jobs               map[string]*DownloadJob
+	running            map[string]*runControl
+	bus                *EventBus
+	store              Store
+	dl                 Downloader
+	progressIntervalMs int
 }
 
 func NewManager(store Store) *Manager {
 	return &Manager{
-		jobs:    make(map[string]*DownloadJob),
-		running: make(map[string]*runControl),
-		bus:     NewEventBus(),
-		store:   store,
-		dl:      coreDownloader{},
+		jobs:               make(map[string]*DownloadJob),
+		running:            make(map[string]*runControl),
+		bus:                NewEventBus(),
+		store:              store,
+		dl:                 coreDownloader{},
+		progressIntervalMs: readAgentProgressIntervalMs(),
 	}
 }
 
@@ -363,6 +365,7 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 		return
 	}
 	req := toDownloadOptions(job)
+	req.ProgressIntervalMs = m.progressIntervalMs
 	log.Printf("agent: job goroutine started id=%s url=%s output=%s dir=%s", id, req.URL, req.OutputPath, req.Directory)
 	m.mu.RUnlock()
 
@@ -370,6 +373,8 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 	dl := m.dl
 	m.mu.RUnlock()
 
+	lastProgressSave := time.Time{}
+	savedProgressSnapshot := false
 	err := dl.Download(ctx, req, func(ev quickget.DownloadEvent) {
 		if ev.Type != "progress" {
 			return
@@ -387,7 +392,12 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 
 		log.Printf("agent: progress id=%s downloaded=%d total=%d percent=%.2f", id, snap.Downloaded, snap.Total, snap.Percent)
 		m.publishSnapshot(snap, events.EventDownloadProgress, ev.Message, "")
-		_ = m.SaveState()
+		now := time.Now().UTC()
+		if !savedProgressSnapshot || now.Sub(lastProgressSave) >= time.Duration(progressPersistIntervalMs)*time.Millisecond {
+			_ = m.SaveState()
+			lastProgressSave = now
+			savedProgressSnapshot = true
+		}
 	})
 
 	m.mu.Lock()

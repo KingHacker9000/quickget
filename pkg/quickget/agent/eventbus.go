@@ -6,7 +6,7 @@ import (
 	"quickget/pkg/quickget/events"
 )
 
-const defaultSubscriberBuffer = 16
+const defaultSubscriberBuffer = 128
 
 type EventBus struct {
 	mu          sync.RWMutex

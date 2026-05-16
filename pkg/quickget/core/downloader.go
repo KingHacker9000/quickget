@@ -65,6 +65,7 @@ type Request struct {
 	URL                string
 	Stdout             io.Writer
 	ProgressReporter   progress.Reporter
+	ProgressIntervalMs int
 }
 
 type Result struct {
@@ -206,7 +207,7 @@ func Download(ctx context.Context, options Request) (Result, error) {
 	useSingle := info.Size <= 0 || !info.RangeSupported || options.Workers <= 1
 	if useSingle {
 		fmt.Fprintln(options.Stdout, "Mode: single download")
-		if err := downloadSingle(ctx, client, info.FinalURL, options.OutputPath, info.Size, options.BufferSize, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter); err != nil {
+		if err := downloadSingle(ctx, client, info.FinalURL, options.OutputPath, info.Size, options.BufferSize, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter, options.ProgressIntervalMs); err != nil {
 			return Result{}, fmt.Errorf("download failed: %w", err)
 		}
 		return Result{
@@ -220,7 +221,7 @@ func Download(ctx context.Context, options Request) (Result, error) {
 	}
 
 	fmt.Fprintln(options.Stdout, "Mode: parallel download")
-	writeStats, err := downloadParallel(ctx, client, info.FinalURL, options.OutputPath, info.Size, options.Workers, options.Verbose, options.Retries, options.Dynamic, options.MinSplitSize, options.MinDynamicFileSize, options.QueueMode, options.SegmentSize, options.BufferSize, options.WriteDisk, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter)
+	writeStats, err := downloadParallel(ctx, client, info.FinalURL, options.OutputPath, info.Size, options.Workers, options.Verbose, options.Retries, options.Dynamic, options.MinSplitSize, options.MinDynamicFileSize, options.QueueMode, options.SegmentSize, options.BufferSize, options.WriteDisk, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter, options.ProgressIntervalMs)
 	if err != nil {
 		return Result{}, fmt.Errorf("parallel download failed: %w", err)
 	}
@@ -283,11 +284,11 @@ func DownloadSample(ctx context.Context, options Request, sampleBytes int64) (Re
 			return Result{}, errors.New("server does not support ranges for partial sample download")
 		}
 		if info.RangeSupported && effectiveSize < info.Size {
-			if err := downloadSingleRange(ctx, client, info.FinalURL, options.OutputPath, info.Size, effectiveSize, options.BufferSize, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter); err != nil {
+			if err := downloadSingleRange(ctx, client, info.FinalURL, options.OutputPath, info.Size, effectiveSize, options.BufferSize, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter, options.ProgressIntervalMs); err != nil {
 				return Result{}, fmt.Errorf("download failed: %w", err)
 			}
 		} else {
-			if err := downloadSingle(ctx, client, info.FinalURL, options.OutputPath, info.Size, options.BufferSize, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter); err != nil {
+			if err := downloadSingle(ctx, client, info.FinalURL, options.OutputPath, info.Size, options.BufferSize, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter, options.ProgressIntervalMs); err != nil {
 				return Result{}, fmt.Errorf("download failed: %w", err)
 			}
 			if info.Size > 0 {
@@ -304,7 +305,7 @@ func DownloadSample(ctx context.Context, options Request, sampleBytes int64) (Re
 		}, nil
 	}
 
-	writeStats, err := downloadParallel(ctx, client, info.FinalURL, options.OutputPath, effectiveSize, options.Workers, options.Verbose, options.Retries, options.Dynamic, options.MinSplitSize, options.MinDynamicFileSize, options.QueueMode, options.SegmentSize, options.BufferSize, options.WriteDisk, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter)
+	writeStats, err := downloadParallel(ctx, client, info.FinalURL, options.OutputPath, effectiveSize, options.Workers, options.Verbose, options.Retries, options.Dynamic, options.MinSplitSize, options.MinDynamicFileSize, options.QueueMode, options.SegmentSize, options.BufferSize, options.WriteDisk, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter, options.ProgressIntervalMs)
 	if err != nil {
 		return Result{}, fmt.Errorf("parallel download failed: %w", err)
 	}
@@ -450,7 +451,7 @@ func downloadSegmentWithRetry(ctx context.Context, client *http.Client, rawURL s
 	return lastErr
 }
 
-func downloadSingle(ctx context.Context, client *http.Client, rawURL string, outputPath string, totalSize int64, bufferSize int, headers http.Header, userAgent string, out io.Writer, reporter progress.Reporter) error {
+func downloadSingle(ctx context.Context, client *http.Client, rawURL string, outputPath string, totalSize int64, bufferSize int, headers http.Header, userAgent string, out io.Writer, reporter progress.Reporter, progressIntervalMs int) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
@@ -474,7 +475,7 @@ func downloadSingle(ctx context.Context, client *http.Client, rawURL string, out
 	defer outFile.Close()
 
 	var downloaded int64
-	progressDone, progressFinished := progress.StartProgressLoop(out, &downloaded, totalSize, reporter, nil)
+	progressDone, progressFinished := progress.StartProgressLoop(out, &downloaded, totalSize, reporter, nil, progressIntervalMs)
 	defer func() {
 		close(progressDone)
 		<-progressFinished
@@ -501,7 +502,7 @@ func downloadSingle(ctx context.Context, client *http.Client, rawURL string, out
 	return nil
 }
 
-func downloadSingleRange(ctx context.Context, client *http.Client, rawURL string, outputPath string, totalSize int64, sampleSize int64, bufferSize int, headers http.Header, userAgent string, out io.Writer, reporter progress.Reporter) error {
+func downloadSingleRange(ctx context.Context, client *http.Client, rawURL string, outputPath string, totalSize int64, sampleSize int64, bufferSize int, headers http.Header, userAgent string, out io.Writer, reporter progress.Reporter, progressIntervalMs int) error {
 	if sampleSize <= 0 {
 		return fmt.Errorf("invalid sample size: %d", sampleSize)
 	}
@@ -530,7 +531,7 @@ func downloadSingleRange(ctx context.Context, client *http.Client, rawURL string
 	defer outFile.Close()
 
 	var downloaded int64
-	progressDone, progressFinished := progress.StartProgressLoop(out, &downloaded, totalSize, reporter, nil)
+	progressDone, progressFinished := progress.StartProgressLoop(out, &downloaded, totalSize, reporter, nil, progressIntervalMs)
 	defer func() {
 		close(progressDone)
 		<-progressFinished
@@ -574,7 +575,7 @@ func splitIntoSegments(size int64, segmentSize int64) []manifest.Chunk {
 	return chunks
 }
 
-func downloadParallel(ctx context.Context, client *http.Client, rawURL string, outputPath string, totalSize int64, connections int, verbose bool, maxRetries int, dynamic bool, minSplitSize int64, minDynamicFileSize int64, queueMode bool, segmentSize int64, bufferSize int, writeDisk string, headers http.Header, userAgent string, out io.Writer, reporter progress.Reporter) (*progress.DownloadStats, error) {
+func downloadParallel(ctx context.Context, client *http.Client, rawURL string, outputPath string, totalSize int64, connections int, verbose bool, maxRetries int, dynamic bool, minSplitSize int64, minDynamicFileSize int64, queueMode bool, segmentSize int64, bufferSize int, writeDisk string, headers http.Header, userAgent string, out io.Writer, reporter progress.Reporter, progressIntervalMs int) (*progress.DownloadStats, error) {
 	mPath := manifest.Path(outputPath)
 	var m manifest.DownloadManifest
 
@@ -657,9 +658,9 @@ func downloadParallel(ctx context.Context, client *http.Client, rawURL string, o
 	var progressDone chan struct{}
 	var progressFinished chan struct{}
 	if verbose {
-		progressDone, progressFinished = progress.StartVerboseProgressLoop(out, &downloaded, totalSize, chunkTotals, chunkDownloaded, reporter, writeStats)
+		progressDone, progressFinished = progress.StartVerboseProgressLoop(out, &downloaded, totalSize, chunkTotals, chunkDownloaded, reporter, writeStats, progressIntervalMs)
 	} else {
-		progressDone, progressFinished = progress.StartProgressLoop(out, &downloaded, totalSize, reporter, writeStats)
+		progressDone, progressFinished = progress.StartProgressLoop(out, &downloaded, totalSize, reporter, writeStats, progressIntervalMs)
 	}
 
 	stopSaver := make(chan struct{})

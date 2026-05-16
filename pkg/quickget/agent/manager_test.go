@@ -448,6 +448,44 @@ func TestManagerEventsAndStateSavesOnTransitions(t *testing.T) {
 	}
 }
 
+func TestManagerUsesConfiguredProgressIntervalForDownloader(t *testing.T) {
+	t.Setenv(progressIntervalEnv, "100")
+	dl := newFakeDownloader()
+	st := &fakeStore{}
+	m := newManagerWithFake(t, dl, st)
+
+	snap, err := m.CreateDownload(newReq())
+	if err != nil {
+		t.Fatalf("CreateDownload error: %v", err)
+	}
+	dl.waitStarted(t)
+	dl.allowReturn()
+	waitForStatus(t, m, snap.ID, JobStatusCompleted)
+
+	if got := dl.options().ProgressIntervalMs; got != 100 {
+		t.Fatalf("expected progress interval 100ms, got %d", got)
+	}
+}
+
+func TestManagerClampsProgressIntervalToSafeMinimum(t *testing.T) {
+	t.Setenv(progressIntervalEnv, "10")
+	dl := newFakeDownloader()
+	st := &fakeStore{}
+	m := newManagerWithFake(t, dl, st)
+
+	snap, err := m.CreateDownload(newReq())
+	if err != nil {
+		t.Fatalf("CreateDownload error: %v", err)
+	}
+	dl.waitStarted(t)
+	dl.allowReturn()
+	waitForStatus(t, m, snap.ID, JobStatusCompleted)
+
+	if got := dl.options().ProgressIntervalMs; got != 50 {
+		t.Fatalf("expected clamped progress interval 50ms, got %d", got)
+	}
+}
+
 func TestManagerLoadStateRecoversSnapshotsAndPublishesReady(t *testing.T) {
 	now := time.Now().UTC()
 	completedAt := now.Add(-time.Minute)

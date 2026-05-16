@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-const RefreshIntervalMS = 200
+const (
+	RefreshIntervalMS    = 200
+	MinRefreshIntervalMS = 50
+)
 
 type DownloadStats struct {
 	startTime       time.Time
@@ -62,13 +65,24 @@ func (s *DownloadStats) WritePercentApprox() float64 {
 	return pct
 }
 
-func StartProgressLoop(w io.Writer, downloaded *int64, totalSize int64, reporter Reporter, writeStats *DownloadStats) (chan struct{}, chan struct{}) {
+func sanitizeIntervalMS(intervalMs int) int {
+	if intervalMs <= 0 {
+		return RefreshIntervalMS
+	}
+	if intervalMs < MinRefreshIntervalMS {
+		return MinRefreshIntervalMS
+	}
+	return intervalMs
+}
+
+func StartProgressLoop(w io.Writer, downloaded *int64, totalSize int64, reporter Reporter, writeStats *DownloadStats, intervalMs int) (chan struct{}, chan struct{}) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	start := time.Now()
+	intervalMs = sanitizeIntervalMS(intervalMs)
 	go func() {
 		defer close(finished)
-		ticker := time.NewTicker(RefreshIntervalMS * time.Millisecond)
+		ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
 		defer ticker.Stop()
 
 		for {
@@ -89,14 +103,15 @@ func StartProgressLoop(w io.Writer, downloaded *int64, totalSize int64, reporter
 	return done, finished
 }
 
-func StartVerboseProgressLoop(w io.Writer, downloaded *int64, totalSize int64, chunkTotals []int64, chunkDownloaded []int64, reporter Reporter, writeStats *DownloadStats) (chan struct{}, chan struct{}) {
+func StartVerboseProgressLoop(w io.Writer, downloaded *int64, totalSize int64, chunkTotals []int64, chunkDownloaded []int64, reporter Reporter, writeStats *DownloadStats, intervalMs int) (chan struct{}, chan struct{}) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	start := time.Now()
+	intervalMs = sanitizeIntervalMS(intervalMs)
 
 	go func() {
 		defer close(finished)
-		ticker := time.NewTicker(RefreshIntervalMS * time.Millisecond)
+		ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
 		defer ticker.Stop()
 		lines := len(chunkTotals) + 1
 		firstRender := true

@@ -42,6 +42,7 @@ type DownloadOptions struct {
 	MinSplitSize       int64
 	MinDynamicFileSize int64
 	WriteDisk          string
+	ProgressIntervalMs int
 }
 
 type DownloadEvent struct {
@@ -202,6 +203,7 @@ func toCoreRequest(opts DownloadOptions) core.Request {
 	if writeDisk := strings.TrimSpace(opts.WriteDisk); writeDisk != "" {
 		req.WriteDisk = writeDisk
 	}
+	req.ProgressIntervalMs = opts.ProgressIntervalMs
 	req.Stdout = io.Discard
 	req.Headers = make(http.Header)
 	for k, v := range opts.Headers {
