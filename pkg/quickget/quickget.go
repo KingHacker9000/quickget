@@ -158,23 +158,50 @@ func Download(ctx context.Context, opts DownloadOptions, emit EventCallback) err
 
 func toCoreRequest(opts DownloadOptions) core.Request {
 	req := core.DefaultRequest()
-	req.URL = opts.URL
-	req.OutputPath = opts.OutputPath
-	req.OutputDir = opts.Directory
-	req.Workers = opts.Connections
-	req.Retries = opts.Retries
+	req.URL = strings.TrimSpace(opts.URL)
+	if output := strings.TrimSpace(opts.OutputPath); output != "" {
+		req.OutputPath = output
+	}
+	if dir := strings.TrimSpace(opts.Directory); dir != "" {
+		req.OutputDir = dir
+	}
+	if opts.Connections > 0 {
+		req.Workers = opts.Connections
+	}
+	if opts.Retries > 0 {
+		req.Retries = opts.Retries
+	}
 	req.QueueMode = opts.QueueMode
-	req.SegmentSize = opts.SegmentSize
-	req.BufferSize = opts.BufferSize
+	if opts.SegmentSize > 0 {
+		req.SegmentSize = opts.SegmentSize
+	}
+	if opts.BufferSize > 0 {
+		req.BufferSize = opts.BufferSize
+		req.BufferSizeSet = true
+	}
 	req.AutoBuffer = opts.AutoBuffer
-	req.ForceHTTP1 = opts.HTTP1
-	req.MaxIdleConns = opts.MaxIdleConns
-	req.IdleTimeoutSec = opts.IdleTimeoutSeconds
-	req.UserAgent = opts.UserAgent
+	if opts.HTTP1 {
+		req.ForceHTTP1 = true
+	}
+	if opts.MaxIdleConns > 0 {
+		req.MaxIdleConns = opts.MaxIdleConns
+	}
+	if opts.IdleTimeoutSeconds > 0 {
+		req.IdleTimeoutSec = opts.IdleTimeoutSeconds
+	}
+	if userAgent := strings.TrimSpace(opts.UserAgent); userAgent != "" {
+		req.UserAgent = userAgent
+	}
 	req.Dynamic = opts.Dynamic
-	req.MinSplitSize = opts.MinSplitSize
-	req.MinDynamicFileSize = opts.MinDynamicFileSize
-	req.WriteDisk = opts.WriteDisk
+	if opts.MinSplitSize > 0 {
+		req.MinSplitSize = opts.MinSplitSize
+	}
+	if opts.MinDynamicFileSize > 0 {
+		req.MinDynamicFileSize = opts.MinDynamicFileSize
+	}
+	if writeDisk := strings.TrimSpace(opts.WriteDisk); writeDisk != "" {
+		req.WriteDisk = writeDisk
+	}
 	req.Stdout = io.Discard
 	req.Headers = make(http.Header)
 	for k, v := range opts.Headers {

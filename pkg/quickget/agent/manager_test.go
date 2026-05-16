@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"quickget/pkg/quickget"
 	"quickget/pkg/quickget/api"
 	"quickget/pkg/quickget/events"
+	"quickget/pkg/quickget/manifest"
 	"quickget/pkg/quickget/store"
 )
 
@@ -44,11 +47,25 @@ func (s *fakeStore) saveCount() int {
 	return len(s.saves)
 }
 
+func (s *fakeStore) hasSavedProgress(id string, downloaded int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, state := range s.saves {
+		for _, snap := range state.Downloads {
+			if snap.ID == id && snap.Downloaded == downloaded {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type fakeDownloader struct {
 	mu       sync.Mutex
 	started  chan struct{}
 	release  chan struct{}
 	progress []quickget.DownloadEvent
+	lastOpts quickget.DownloadOptions
 	err      error
 	block    bool
 	calls    int
@@ -61,6 +78,7 @@ func newFakeDownloader() *fakeDownloader {
 func (f *fakeDownloader) Download(ctx context.Context, opts quickget.DownloadOptions, emit quickget.EventCallback) error {
 	f.mu.Lock()
 	f.calls++
+	f.lastOpts = opts
 	progress := append([]quickget.DownloadEvent(nil), f.progress...)
 	err := f.err
 	block := f.block
@@ -106,6 +124,12 @@ func (f *fakeDownloader) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+func (f *fakeDownloader) options() quickget.DownloadOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastOpts
 }
 
 func newManagerWithFake(t *testing.T, dl *fakeDownloader, st *fakeStore) *Manager {
@@ -198,6 +222,9 @@ func TestManagerProgressUpdatesJobState(t *testing.T) {
 	if got.Downloaded != 10 || got.Total != 100 || got.Percent != 10 || got.Message != "p1" {
 		t.Fatalf("unexpected progress snapshot: %+v", got)
 	}
+	if !st.hasSavedProgress(snap.ID, 10) {
+		t.Fatalf("expected progress state to be persisted for job %s", snap.ID)
+	}
 }
 
 func TestManagerFailureMarksFailed(t *testing.T) {
@@ -215,6 +242,86 @@ func TestManagerFailureMarksFailed(t *testing.T) {
 	final := waitForStatus(t, m, snap.ID, JobStatusFailed)
 	if final.Error != "boom" {
 		t.Fatalf("expected failure error, got %q", final.Error)
+	}
+}
+
+func TestManagerDefaultOutputPathDerivedFromURL(t *testing.T) {
+	dl := newFakeDownloader()
+	st := &fakeStore{}
+	m := newManagerWithFake(t, dl, st)
+
+	req := api.CreateDownloadRequest{
+		URL:       "https://getsamplefiles.com/download/zip/sample-1.zip",
+		Directory: ".",
+	}
+	snap, err := m.CreateDownload(req)
+	if err != nil {
+		t.Fatalf("CreateDownload error: %v", err)
+	}
+	dl.waitStarted(t)
+	dl.allowReturn()
+	waitForStatus(t, m, snap.ID, JobStatusCompleted)
+
+	got, ok := m.Get(snap.ID)
+	if !ok {
+		t.Fatalf("job %s not found", snap.ID)
+	}
+	if filepath.Base(got.OutputPath) != "sample-1.zip" {
+		t.Fatalf("expected derived output filename sample-1.zip, got %q", got.OutputPath)
+	}
+	if dl.options().OutputPath != "sample-1.zip" {
+		t.Fatalf("expected downloader output filename sample-1.zip, got %q", dl.options().OutputPath)
+	}
+	if dl.options().BufferSize <= 0 {
+		t.Fatalf("expected non-zero default buffer size, got %d", dl.options().BufferSize)
+	}
+}
+
+func TestManagerReturnsFromRunningAfterDownloaderReturns(t *testing.T) {
+	dl := newFakeDownloader()
+	st := &fakeStore{}
+	m := newManagerWithFake(t, dl, st)
+
+	snap, err := m.CreateDownload(newReq())
+	if err != nil {
+		t.Fatalf("CreateDownload error: %v", err)
+	}
+	dl.waitStarted(t)
+	dl.allowReturn()
+
+	final := waitForStatus(t, m, snap.ID, JobStatusCompleted)
+	if final.Status == JobStatusRunning || final.Status == JobStatusQueued {
+		t.Fatalf("job must transition out of queued/running, got %s", final.Status)
+	}
+}
+
+func TestManagerRepairsDirectoryLikeOutputPathFromStoredState(t *testing.T) {
+	now := time.Now().UTC()
+	st := &fakeStore{
+		load: store.AgentState{
+			Version: 1,
+			Downloads: []api.DownloadSnapshot{
+				{ID: "d1", URL: "https://getsamplefiles.com/download/zip/sample-1.zip", OutputPath: ".", Status: JobStatusPaused, CreatedAt: now, UpdatedAt: now},
+			},
+			UpdatedAt: now,
+		},
+	}
+	dl := newFakeDownloader()
+	m := newManagerWithFake(t, dl, st)
+
+	if err := m.LoadState(); err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if err := m.Resume("d1"); err != nil {
+		t.Fatalf("Resume error: %v", err)
+	}
+	dl.waitStarted(t)
+	dl.allowReturn()
+	waitForStatus(t, m, "d1", JobStatusCompleted)
+
+	opts := dl.options()
+	if opts.OutputPath != "sample-1.zip" {
+		t.Fatalf("expected repaired output path sample-1.zip, got %q", opts.OutputPath)
 	}
 }
 
@@ -264,6 +371,50 @@ func TestManagerPauseResumeCancelDelete(t *testing.T) {
 	}
 	if _, ok := m.Get(snap.ID); ok {
 		t.Fatal("expected job to be deleted")
+	}
+}
+
+func TestManagerDeleteWithFilesRemovesOutputAndManifest(t *testing.T) {
+	dl := newFakeDownloader()
+	dl.block = true
+	st := &fakeStore{}
+	m := newManagerWithFake(t, dl, st)
+
+	dir := t.TempDir()
+	req := api.CreateDownloadRequest{
+		URL:        "https://unit.test/file.bin",
+		OutputPath: "file.bin",
+		Directory:  dir,
+	}
+	snap, err := m.CreateDownload(req)
+	if err != nil {
+		t.Fatalf("CreateDownload error: %v", err)
+	}
+	dl.waitStarted(t)
+
+	job, ok := m.Get(snap.ID)
+	if !ok {
+		t.Fatalf("job %s not found", snap.ID)
+	}
+
+	outputPath := job.OutputPath
+	manifestPath := manifest.Path(outputPath)
+	if err := os.WriteFile(outputPath, []byte("partial"), 0o644); err != nil {
+		t.Fatalf("write output: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	if err := m.Delete(snap.ID, true); err != nil {
+		t.Fatalf("Delete error: %v", err)
+	}
+
+	if _, err := os.Stat(outputPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected output removed, err=%v", err)
+	}
+	if _, err := os.Stat(manifestPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected manifest removed, err=%v", err)
 	}
 }
 

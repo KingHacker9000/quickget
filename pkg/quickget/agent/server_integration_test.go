@@ -118,6 +118,18 @@ func TestServerIntegrationHTTPAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("POST /downloads with trailing JSON tokens returns 400", func(t *testing.T) {
+		payload := []byte(`{"url":"https://unit.test/file.bin"}{"extra":true}`)
+		resp, err := client.Do(authReq(t, http.MethodPost, srv.URL+"/downloads", bytes.NewReader(payload)))
+		if err != nil {
+			t.Fatalf("POST /downloads malformed JSON: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status=%d", resp.StatusCode)
+		}
+	})
+
 	t.Run("GET /downloads/{id} returns that job", func(t *testing.T) {
 		resp, err := client.Do(authReq(t, http.MethodGet, srv.URL+"/downloads/"+created.ID, nil))
 		if err != nil {

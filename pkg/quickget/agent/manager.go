@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -74,16 +75,28 @@ func (m *Manager) CreateDownload(req api.CreateDownloadRequest) (api.DownloadSna
 		return api.DownloadSnapshot{}, errors.New("url is required")
 	}
 
+	req.URL = strings.TrimSpace(req.URL)
+	req.Directory = strings.TrimSpace(req.Directory)
+	req.OutputPath = strings.TrimSpace(req.OutputPath)
+	if req.OutputPath == "." {
+		req.OutputPath = ""
+	}
+	if req.OutputPath == "" {
+		req.OutputPath = deriveSafeOutputFilenameFromURL(req.URL)
+	}
+
 	now := time.Now().UTC()
+	coreReq := toCoreRequest(req)
+	resolvedOutputPath := resolveJobOutputPath(coreReq.OutputPath, coreReq.OutputDir)
 	job := &DownloadJob{
 		ID:         NewJobID(),
 		URL:        req.URL,
-		OutputPath: req.OutputPath,
+		OutputPath: resolvedOutputPath,
 		Directory:  req.Directory,
 		Status:     JobStatusQueued,
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		Options:    toCoreRequest(req),
+		Options:    coreReq,
 	}
 
 	m.mu.Lock()
@@ -91,6 +104,7 @@ func (m *Manager) CreateDownload(req api.CreateDownloadRequest) (api.DownloadSna
 	snap := job.Snapshot()
 	m.mu.Unlock()
 
+	log.Printf("agent: created job id=%s url=%s output=%s dir=%s", job.ID, job.URL, job.OutputPath, job.Directory)
 	m.publish(job, events.EventDownloadCreated, "", "")
 	_ = m.SaveState()
 
@@ -123,6 +137,7 @@ func (m *Manager) Start(id string) error {
 	snapshot := job.Snapshot()
 	m.mu.Unlock()
 
+	log.Printf("agent: starting job id=%s output=%s dir=%s", snapshot.ID, snapshot.OutputPath, job.Directory)
 	m.publishSnapshot(snapshot, events.EventDownloadStarted, "download started", "")
 	_ = m.SaveState()
 
@@ -216,8 +231,10 @@ func (m *Manager) Delete(id string, deleteFiles bool) error {
 	m.mu.Unlock()
 
 	if deleteFiles {
-		_ = os.Remove(job.OutputPath)
-		_ = os.Remove(manifest.Path(job.OutputPath))
+		if outputPath := strings.TrimSpace(job.OutputPath); outputPath != "" {
+			_ = os.Remove(outputPath)
+			_ = os.Remove(manifest.Path(outputPath))
+		}
 	}
 
 	e := events.Event{Type: events.EventDownloadCancelled, ID: id, Timestamp: time.Now().UTC(), Status: JobStatusDeleted, Message: "download deleted"}
@@ -291,10 +308,18 @@ func (m *Manager) LoadState() error {
 			CompletedAt: snap.CompletedAt,
 		}
 		if snap.URL != "" {
+			outBase := strings.TrimSpace(filepath.Base(snap.OutputPath))
+			outDir := strings.TrimSpace(filepath.Dir(snap.OutputPath))
+			if outBase == "." || outBase == string(filepath.Separator) {
+				outBase = ""
+			}
+			if outDir == "." || outDir == string(filepath.Separator) {
+				outDir = ""
+			}
 			job.Options = toCoreRequest(api.CreateDownloadRequest{
 				URL:        snap.URL,
-				OutputPath: filepath.Base(snap.OutputPath),
-				Directory:  filepath.Dir(snap.OutputPath),
+				OutputPath: outBase,
+				Directory:  outDir,
 			})
 		}
 		m.jobs[job.ID] = job
@@ -338,6 +363,7 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 		return
 	}
 	req := toDownloadOptions(job)
+	log.Printf("agent: job goroutine started id=%s url=%s output=%s dir=%s", id, req.URL, req.OutputPath, req.Directory)
 	m.mu.RUnlock()
 
 	m.mu.RLock()
@@ -359,7 +385,9 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 		snap := job.Snapshot()
 		m.mu.Unlock()
 
+		log.Printf("agent: progress id=%s downloaded=%d total=%d percent=%.2f", id, snap.Downloaded, snap.Total, snap.Percent)
 		m.publishSnapshot(snap, events.EventDownloadProgress, ev.Message, "")
+		_ = m.SaveState()
 	})
 
 	m.mu.Lock()
@@ -384,20 +412,24 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 		job.Error = ""
 		eventType = events.EventDownloadCompleted
 		message = "download completed"
+		log.Printf("agent: completed job id=%s downloaded=%d total=%d output=%s", id, job.Downloaded, job.Total, job.OutputPath)
 	} else if pauseRequested {
 		job.MarkStatus(JobStatusPaused)
 		eventType = events.EventDownloadPaused
 		message = "download paused"
+		log.Printf("agent: paused job id=%s", id)
 	} else if cancelRequested {
 		job.MarkStatus(JobStatusCancelled)
 		eventType = events.EventDownloadCancelled
 		message = "download cancelled"
+		log.Printf("agent: cancelled job id=%s", id)
 	} else {
 		job.MarkStatus(JobStatusFailed)
 		job.Error = err.Error()
 		eventType = events.EventDownloadFailed
 		message = "download failed"
 		errText = err.Error()
+		log.Printf("agent: failed job id=%s err=%v", id, err)
 	}
 
 	snap := job.Snapshot()
@@ -432,17 +464,34 @@ func (m *Manager) publishSnapshot(s api.DownloadSnapshot, eventType, msg, errTex
 
 func toCoreRequest(req api.CreateDownloadRequest) core.Request {
 	coreReq := core.DefaultRequest()
-	coreReq.URL = req.URL
-	coreReq.OutputPath = req.OutputPath
-	coreReq.OutputDir = req.Directory
-	coreReq.Workers = req.Connections
-	coreReq.Retries = req.Retries
+	coreReq.URL = strings.TrimSpace(req.URL)
+	if output := strings.TrimSpace(req.OutputPath); output != "" {
+		coreReq.OutputPath = output
+	}
+	if dir := strings.TrimSpace(req.Directory); dir != "" {
+		coreReq.OutputDir = dir
+	}
+	if req.Connections > 0 {
+		coreReq.Workers = req.Connections
+	}
+	if req.Retries > 0 {
+		coreReq.Retries = req.Retries
+	}
 	coreReq.QueueMode = req.QueueMode
-	coreReq.SegmentSize = req.SegmentSize
-	coreReq.BufferSize = req.BufferSize
+	if req.SegmentSize > 0 {
+		coreReq.SegmentSize = req.SegmentSize
+	}
+	if req.BufferSize > 0 {
+		coreReq.BufferSize = req.BufferSize
+		coreReq.BufferSizeSet = true
+	}
 	coreReq.AutoBuffer = req.AutoBuffer
-	coreReq.ForceHTTP1 = req.HTTP1
-	coreReq.UserAgent = req.UserAgent
+	if req.HTTP1 {
+		coreReq.ForceHTTP1 = true
+	}
+	if userAgent := strings.TrimSpace(req.UserAgent); userAgent != "" {
+		coreReq.UserAgent = userAgent
+	}
 	coreReq.Headers = make(http.Header)
 	for k, v := range req.Headers {
 		if strings.TrimSpace(k) == "" {
@@ -463,10 +512,23 @@ func toDownloadOptions(job *DownloadJob) quickget.DownloadOptions {
 		headers[k] = values[0]
 	}
 
+	outputPath := strings.TrimSpace(job.Options.OutputPath)
+	if outputPath == "." {
+		outputPath = ""
+	}
+	if outputPath == "" {
+		outputPath = deriveSafeOutputFilenameFromURL(job.URL)
+	}
+
+	directory := strings.TrimSpace(job.Options.OutputDir)
+	if directory == "." {
+		directory = ""
+	}
+
 	return quickget.DownloadOptions{
 		URL:                job.URL,
-		OutputPath:         job.Options.OutputPath,
-		Directory:          job.Options.OutputDir,
+		OutputPath:         outputPath,
+		Directory:          directory,
 		Connections:        job.Options.Workers,
 		Retries:            job.Options.Retries,
 		QueueMode:          job.Options.QueueMode,
@@ -483,4 +545,21 @@ func toDownloadOptions(job *DownloadJob) quickget.DownloadOptions {
 		MinDynamicFileSize: job.Options.MinDynamicFileSize,
 		WriteDisk:          job.Options.WriteDisk,
 	}
+}
+
+func resolveJobOutputPath(outputPath string, outputDir string) string {
+	outputPath = strings.TrimSpace(outputPath)
+	if outputPath == "" {
+		return ""
+	}
+	if filepath.IsAbs(outputPath) {
+		return filepath.Clean(outputPath)
+	}
+
+	outputDir = strings.TrimSpace(outputDir)
+	if outputDir == "" || outputDir == "." {
+		outputDir = core.DefaultDownloadDir()
+	}
+
+	return filepath.Clean(filepath.Join(outputDir, outputPath))
 }

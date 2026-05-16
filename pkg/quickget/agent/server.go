@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -344,7 +345,7 @@ func decodeJSONBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 		return zero, false
 	}
 
-	if dec.More() {
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return zero, false
 	}
