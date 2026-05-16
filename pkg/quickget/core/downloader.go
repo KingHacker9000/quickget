@@ -240,6 +240,90 @@ func Download(ctx context.Context, options Request) (Result, error) {
 	return res, nil
 }
 
+func DownloadSample(ctx context.Context, options Request, sampleBytes int64) (Result, error) {
+	if sampleBytes <= 0 {
+		return Result{}, fmt.Errorf("sample bytes must be > 0")
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, fmt.Errorf("download cancelled: %w", err)
+	}
+	if options.Stdout == nil {
+		options.Stdout = io.Discard
+	}
+	validatedURL, err := probe.ValidateURL(options.URL)
+	if err != nil {
+		return Result{}, err
+	}
+
+	client := NewHTTPClient(options.Workers, options.ForceHTTP1, options.MaxIdleConns, options.IdleTimeoutSec)
+	info, err := probe.FetchURLInfo(ctx, client, validatedURL, options.Headers, options.UserAgent, ApplyHeaders)
+	if err != nil {
+		return Result{}, fmt.Errorf("HEAD request failed: %w", err)
+	}
+
+	if options.OutputPath == "" {
+		options.OutputPath = info.SuggestedOutputName
+	}
+	if options.OutputDir == "" {
+		options.OutputDir = DefaultDownloadDir()
+	}
+	options.OutputPath = filepath.Join(options.OutputDir, options.OutputPath)
+
+	effectiveSize := sampleBytes
+	if info.Size > 0 && sampleBytes > info.Size {
+		effectiveSize = info.Size
+	}
+	if effectiveSize <= 0 {
+		return Result{}, fmt.Errorf("effective sample size is invalid: %d", effectiveSize)
+	}
+
+	useSingle := !info.RangeSupported || options.Workers <= 1
+	if useSingle {
+		if !info.RangeSupported && info.Size > 0 && effectiveSize < info.Size {
+			return Result{}, errors.New("server does not support ranges for partial sample download")
+		}
+		if info.RangeSupported && effectiveSize < info.Size {
+			if err := downloadSingleRange(ctx, client, info.FinalURL, options.OutputPath, info.Size, effectiveSize, options.BufferSize, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter); err != nil {
+				return Result{}, fmt.Errorf("download failed: %w", err)
+			}
+		} else {
+			if err := downloadSingle(ctx, client, info.FinalURL, options.OutputPath, info.Size, options.BufferSize, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter); err != nil {
+				return Result{}, fmt.Errorf("download failed: %w", err)
+			}
+			if info.Size > 0 {
+				effectiveSize = info.Size
+			}
+		}
+		return Result{
+			FinalURL:        info.FinalURL,
+			OutputPath:      options.OutputPath,
+			Size:            effectiveSize,
+			Mode:            "single",
+			RangeSupported:  info.RangeSupported,
+			UsedConnections: 1,
+		}, nil
+	}
+
+	writeStats, err := downloadParallel(ctx, client, info.FinalURL, options.OutputPath, effectiveSize, options.Workers, options.Verbose, options.Retries, options.Dynamic, options.MinSplitSize, options.MinDynamicFileSize, options.QueueMode, options.SegmentSize, options.BufferSize, options.WriteDisk, options.Headers, options.UserAgent, options.Stdout, options.ProgressReporter)
+	if err != nil {
+		return Result{}, fmt.Errorf("parallel download failed: %w", err)
+	}
+
+	res := Result{
+		FinalURL:        info.FinalURL,
+		OutputPath:      options.OutputPath,
+		Size:            effectiveSize,
+		Mode:            "parallel",
+		RangeSupported:  info.RangeSupported,
+		UsedConnections: options.Workers,
+	}
+	if writeStats != nil {
+		res.WriteNanos = writeStats.WriteNanos()
+		res.WritePercent = writeStats.WritePercentApprox()
+	}
+	return res, nil
+}
+
 func splitIntoChunks(size int64, connections int) []manifest.Chunk {
 	if size <= 0 || connections <= 0 {
 		return nil
@@ -381,6 +465,62 @@ func downloadSingle(ctx context.Context, client *http.Client, rawURL string, out
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("GET failed with status: %s", resp.Status)
+	}
+
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	var downloaded int64
+	progressDone, progressFinished := progress.StartProgressLoop(out, &downloaded, totalSize, reporter, nil)
+	defer func() {
+		close(progressDone)
+		<-progressFinished
+	}()
+
+	buf := make([]byte, bufferSize)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			written, writeErr := outFile.Write(buf[:n])
+			if writeErr != nil {
+				return writeErr
+			}
+			atomic.AddInt64(&downloaded, int64(written))
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+
+	return nil
+}
+
+func downloadSingleRange(ctx context.Context, client *http.Client, rawURL string, outputPath string, totalSize int64, sampleSize int64, bufferSize int, headers http.Header, userAgent string, out io.Writer, reporter progress.Reporter) error {
+	if sampleSize <= 0 {
+		return fmt.Errorf("invalid sample size: %d", sampleSize)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	ApplyHeaders(req, headers, userAgent)
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", sampleSize-1))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if err := probe.ExplainServerStatus(resp.StatusCode, true, fmt.Sprintf("bytes=0-%d", sampleSize-1), rawURL); err != nil {
+		return err
 	}
 
 	outFile, err := os.Create(outputPath)

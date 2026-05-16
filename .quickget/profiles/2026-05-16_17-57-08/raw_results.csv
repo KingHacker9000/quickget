@@ -1,0 +1,13 @@
+timestamp,quickget_version,os,arch,cpu_count,go_version,size_label,target_bytes,url,repeat_index,connections,queue_mode,segment_size,buffer_size,http_mode,elapsed_seconds,avg_mbps,peak_mbps,bytes_downloaded,success,error,server_supports_ranges,disk_write_percent
+2026-05-16T13:56:23Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,1,1,true,1048576,1048576,auto,4.387517,2.279194,2.782557,10485760,true,,true,
+2026-05-16T13:56:27Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,2,1,true,1048576,1048576,auto,4.493526,2.225424,2.669504,10485760,true,,true,
+2026-05-16T13:56:32Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,3,1,true,1048576,1048576,auto,3.447633,2.900541,3.651976,10485760,true,,true,
+2026-05-16T13:56:35Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,1,1,true,4194304,1048576,auto,4.701926,2.126788,2.709928,10485760,true,,true,
+2026-05-16T13:56:40Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,2,1,true,4194304,1048576,auto,4.592934,2.177258,2.627518,10485760,true,,true,
+2026-05-16T13:56:45Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,3,1,true,4194304,1048576,auto,3.878076,2.578598,3.290784,10485760,true,,true,
+2026-05-16T13:56:48Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,1,4,true,1048576,1048576,auto,3.648173,2.741098,3.411421,10485760,true,,true,4.048287
+2026-05-16T13:56:52Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,2,4,true,1048576,1048576,auto,3.795471,2.634719,3.254830,10485760,true,,true,1.289422
+2026-05-16T13:56:56Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,3,4,true,1048576,1048576,auto,3.175102,3.149505,3.961641,10485760,true,,true,3.799535
+2026-05-16T13:56:59Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,1,8,true,1048576,1048576,auto,2.781646,3.594993,4.842665,10485760,true,,true,3.399120
+2026-05-16T13:57:02Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,2,8,true,1048576,1048576,auto,2.880480,3.471644,4.459589,10485760,true,,true,3.921223
+2026-05-16T13:57:05Z,,windows,amd64,20,go1.26.3,10MB,10485760,https://proof.ovh.net/files/1Gb.dat,3,8,true,1048576,1048576,auto,3.231250,3.094777,4.004035,10485760,true,,true,3.707382

@@ -80,6 +80,7 @@ quickget.exe clean <output-file>
 quickget.exe hash <file>
 quickget.exe disk-test -o <temp-test-file>
 quickget.exe tune-disk -o <temp-test-file>
+quickget.exe profile [options]
 ```
 
 ## Download Flags
@@ -172,10 +173,35 @@ QuickGet/
 # Run unit tests
 go test ./...
 
-# Benchmark helpers (local tooling)
-python .temp/benchmark_search.py --repeats 2 --top 10
-python .temp/benchmark.py
+# Built-in profiler / benchmark tournament
+quickget.exe profile --level normal --sizes 10MB,100MB,1GB --repeats 3
 ```
+
+## Profiling and Benchmarking
+
+Use the built-in `profile` command to benchmark queue-mode settings and produce reproducible artifacts.
+
+```bash
+# Fast pass
+quickget.exe profile --level quick --sizes 100MB --repeats 2
+
+# Default balanced search
+quickget.exe profile --level normal --sizes 10MB,100MB,1GB --repeats 3
+
+# Full matrix sweep
+quickget.exe profile --level exhaustive --sizes 1GB --repeats 2
+```
+
+Profile outputs are written to:
+
+```text
+.quickget/profiles/YYYY-MM-DD_HH-MM-SS/
+  raw_results.csv
+  summary.csv
+  recommendations.json
+```
+
+Use `--url` to force a specific test endpoint. URL must support byte ranges and be large enough for selected sizes.
 
 ## Notes
 

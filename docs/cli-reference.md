@@ -14,6 +14,7 @@ quickget.exe clean <output-file>
 quickget.exe hash <file>
 quickget.exe disk-test -o <temp-test-file>
 quickget.exe tune-disk -o <temp-test-file>
+quickget.exe profile [options]
 ```
 
 Legacy shorthand:
@@ -112,6 +113,29 @@ Runs repeated disk write tests for candidate buffer sizes and recommends one.
 ```bash
 quickget.exe disk-test -o C:\temp\quickget-disk-test.bin
 ```
+
+## `profile`
+
+Runs a staged queue-mode benchmark tournament and writes profile artifacts under `.quickget/profiles/<timestamp>/`.
+
+```bash
+quickget.exe profile --level normal --sizes 10MB,100MB,1GB --repeats 3
+```
+
+Profile flags:
+
+| Flag | Type | Default | Description |
+|---|---|---:|---|
+| `--sizes` | string | `10MB,100MB,1GB` | Comma-separated test sizes (`10MB`, `100MB`, `1GB`). |
+| `--url` | string | built-in candidates | Optional custom URL used for all tests. Must support ranges. |
+| `--repeats` | int | `3` | Repeat count per size for final scoring. |
+| `--level` | string | `normal` | Search depth: `quick`, `normal`, `exhaustive`. |
+
+Generated artifacts:
+
+- `raw_results.csv`: one row per run with environment metadata and outcome.
+- `summary.csv`: ranked aggregate stats per size/config.
+- `recommendations.json`: best overall plus best `auto` and `http1` recommendations per size.
 
 ## Error Cases to Expect
 

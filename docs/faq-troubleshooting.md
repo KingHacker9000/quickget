@@ -67,8 +67,14 @@ quickget.exe download -H "Authorization: Bearer TOKEN" <url>
 ## How Do I Benchmark Settings Safely?
 
 - Use a legal public test file.
-- Keep one variable changed per run.
-- Compare dynamic and queue mode on same URL.
+- Prefer `profile` for structured benchmark runs:
+
+```bash
+quickget.exe profile --level normal --sizes 10MB,100MB,1GB --repeats 3
+```
+
+- Use `--url` to pin a trusted endpoint in your region.
+- Keep one variable changed per manual run.
 - Record throughput and error/retry behavior.
 
 ## Where to Report Bugs

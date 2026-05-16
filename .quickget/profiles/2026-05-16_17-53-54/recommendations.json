@@ -1,0 +1,55 @@
+{
+  "source_url": "https://proof.ovh.net/files/1Gb.dat",
+  "sizes": {
+    "10MB": {
+      "best_overall": {
+        "size_label": "10MB",
+        "target_bytes": 10485760,
+        "connections": 2,
+        "queue_mode": true,
+        "segment_size": 1048576,
+        "buffer_size": 262144,
+        "http_mode": "http1",
+        "median_mbps": 2.7776258570746504,
+        "avg_mbps": 2.7776258570746504,
+        "stddev_mbps": 0,
+        "success_rate": 1,
+        "successes": 1,
+        "total_runs": 1
+      },
+      "best_http_auto": {
+        "size_label": "10MB",
+        "target_bytes": 10485760,
+        "connections": 1,
+        "queue_mode": true,
+        "segment_size": 8388608,
+        "buffer_size": 4194304,
+        "http_mode": "auto",
+        "median_mbps": 2.7760713421463787,
+        "avg_mbps": 2.7760713421463787,
+        "stddev_mbps": 0,
+        "success_rate": 1,
+        "successes": 1,
+        "total_runs": 1
+      },
+      "best_http1": {
+        "size_label": "10MB",
+        "target_bytes": 10485760,
+        "connections": 2,
+        "queue_mode": true,
+        "segment_size": 1048576,
+        "buffer_size": 262144,
+        "http_mode": "http1",
+        "median_mbps": 2.7776258570746504,
+        "avg_mbps": 2.7776258570746504,
+        "stddev_mbps": 0,
+        "success_rate": 1,
+        "successes": 1,
+        "total_runs": 1
+      },
+      "tested_at": "2026-05-16T13:53:54Z",
+      "repeats": 3,
+      "notes": "Queue-mode profile results. Failed runs are included in raw results."
+    }
+  }
+}

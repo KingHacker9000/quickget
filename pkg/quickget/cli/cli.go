@@ -57,6 +57,10 @@ func Run(args []string, stdout io.Writer, stderr io.Writer, binName string) erro
 		return runHashCommand(args[1:], stdout, stderr, binName)
 	case "disk-test", "tune-disk":
 		return runDiskTestCommand(args[1:], stdout, stderr, binName)
+	case "profile":
+		return runProfileCommand(args[1:], stdout, stderr, binName)
+	case "benchmark":
+		return runBenchmarkCommand(args[1:], stdout, stderr, binName)
 	default:
 		return runDownload(args, stdout, stderr, binName)
 	}
@@ -615,6 +619,8 @@ func printGlobalUsage(w io.Writer, name string) {
 	fmt.Fprintf(w, "  %s hash <file>\n", name)
 	fmt.Fprintf(w, "  %s disk-test -o <temp-test-file>\n", name)
 	fmt.Fprintf(w, "  %s tune-disk -o <temp-test-file>\n", name)
+	fmt.Fprintf(w, "  %s profile [options]\n", name)
+	fmt.Fprintf(w, "  %s benchmark [options]\n", name)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Backward compatibility:")
 	fmt.Fprintf(w, "  %s [options] <url>  (same as download)\n", name)

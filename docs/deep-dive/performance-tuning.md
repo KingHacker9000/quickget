@@ -69,7 +69,21 @@ quickget.exe download -o file.bin -auto-buffer -n 8 https://example.com/file.bin
 
 ## Benchmarking Guidance
 
-- Fix the test URL and file size across runs.
-- Record elapsed time, average MB/s, and retry counts.
-- Compare dynamic vs queue mode with the same `-n`.
-- Change one variable at a time.
+Use `profile` for repeatable benchmark runs:
+
+```bash
+quickget.exe profile --level normal --sizes 10MB,100MB,1GB --repeats 3
+```
+
+- `quick` level: faster coarse search.
+- `normal` level: balanced staged tournament.
+- `exhaustive` level: full queue-mode matrix sweep.
+- `--url` can pin benchmarking to your own endpoint.
+
+Profile artifacts are saved under `.quickget/profiles/<timestamp>/`:
+
+- `raw_results.csv` for per-run details.
+- `summary.csv` for ranked aggregates.
+- `recommendations.json` for best settings per size.
+
+For manual testing outside `profile`, keep URL and size fixed, change one variable at a time, and compare retries plus throughput.
