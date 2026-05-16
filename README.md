@@ -47,7 +47,12 @@ Or download prebuilt binaries from:
 ### Build
 
 ```bash
+go build ./cmd/quickget
+go build ./cmd/quickget-agent
+
+# Optional named binaries
 go build -o quickget.exe ./cmd/quickget
+go build -o quickget-agent.exe ./cmd/quickget-agent
 ```
 
 ### Run without building
@@ -55,6 +60,21 @@ go build -o quickget.exe ./cmd/quickget
 ```bash
 go run ./cmd/quickget --help
 ```
+
+### Advanced/Developer Component: quickget-agent
+
+`quickget-agent` is an advanced/developer component for integration and agent workflows.
+Most users only need the `quickget` CLI.
+
+```bash
+go build -o quickget-agent.exe ./cmd/quickget-agent
+```
+
+## QuickGet Agent Preview
+
+`quickget-agent` is intended for desktop/background integration scenarios.
+The `quickget` CLI remains the primary user-facing tool for normal use.
+The current agent implementation is local-only and experimental.
 
 ## Quick Start
 
@@ -140,14 +160,20 @@ QuickGet/
 |-- cmd/
 |   `-- quickget/
 |       `-- main.go                 # CLI entrypoint
+|   `-- quickget-agent/
+|       `-- main.go                 # Agent entrypoint
 |-- pkg/
 |   `-- quickget/
+|       |-- agent/                  # Agent server, manager, and auth
+|       |-- agentclient/            # Client integration helpers
+|       |-- api/                    # Shared API request/response types
 |       |-- quickget.go             # Public package facade
 |       |-- cli/
 |       |   |-- cli.go              # Command parsing and CLI dispatch
 |       |   `-- cli_test.go
 |       |-- core/
 |       |   `-- downloader.go       # Download engine and orchestration
+|       |-- events/                 # Event model and payload types
 |       |-- hash/
 |       |   `-- hash.go             # File hashing helpers
 |       |-- manifest/
@@ -166,6 +192,11 @@ QuickGet/
 |-- LICENSE
 `-- README.md
 ```
+
+Related docs:
+- [Agent Architecture](docs/agent-architecture.md)
+- [Agent API](docs/agent-api.md)
+- [Desktop Engine Contract](docs/desktop-engine-contract.md)
 
 ## Development
 

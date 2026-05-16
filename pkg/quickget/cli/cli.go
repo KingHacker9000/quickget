@@ -61,6 +61,8 @@ func Run(args []string, stdout io.Writer, stderr io.Writer, binName string) erro
 		return runProfileCommand(args[1:], stdout, stderr, binName)
 	case "benchmark":
 		return runBenchmarkCommand(args[1:], stdout, stderr, binName)
+	case "agent":
+		return runAgentCommand(args[1:], stdout, stderr, binName)
 	default:
 		return runDownload(args, stdout, stderr, binName)
 	}
@@ -89,7 +91,7 @@ func runDownload(args []string, stdout io.Writer, stderr io.Writer, binName stri
 	}
 	if !options.JsonEvents {
 		options.Stdout = stdout
-		_, err = quickget.Download(context.Background(), quickget.DownloadRequest{Options: options})
+		_, err = quickget.DownloadWithRequest(context.Background(), quickget.DownloadRequest{Options: options})
 		return err
 	}
 
@@ -123,7 +125,7 @@ func runDownload(args []string, stdout io.Writer, stderr io.Writer, binName stri
 			"avg_mbps":   s.SpeedMBps,
 		})
 	}
-	res, err := quickget.Download(context.Background(), quickget.DownloadRequest{Options: options, Reporter: reporter})
+	res, err := quickget.DownloadWithRequest(context.Background(), quickget.DownloadRequest{Options: options, Reporter: reporter})
 	if err != nil {
 		isCancelled := errors.Is(err, context.Canceled) || strings.Contains(strings.ToLower(err.Error()), "download cancelled")
 		if isCancelled {
@@ -621,6 +623,7 @@ func printGlobalUsage(w io.Writer, name string) {
 	fmt.Fprintf(w, "  %s tune-disk -o <temp-test-file>\n", name)
 	fmt.Fprintf(w, "  %s profile [options]\n", name)
 	fmt.Fprintf(w, "  %s benchmark [options]\n", name)
+	fmt.Fprintf(w, "  %s agent <subcommand> [options]\n", name)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Backward compatibility:")
 	fmt.Fprintf(w, "  %s [options] <url>  (same as download)\n", name)

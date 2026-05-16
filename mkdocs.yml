@@ -53,6 +53,11 @@ nav:
       - Architecture: deep-dive/architecture.md
       - Performance Tuning: deep-dive/performance-tuning.md
       - Resume Manifest: deep-dive/resume-manifest.md
+  - Agent Preview:
+      - Agent Architecture: agent-architecture.md
+      - Agent API: agent-api.md
+      - Desktop Engine Contract: desktop-engine-contract.md
+      - Native Messaging Plan: native-messaging-plan.md
   - Testing:
       - User Playbook: testing/playbook.md
       - Contributor Tests: testing/contributor-tests.md

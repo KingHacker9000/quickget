@@ -34,9 +34,11 @@ jobs:
             throw "gofmt -w is required for files listed above"
           }
 
-      - name: Build CLI
-        working-directory: cmd/quickget
-        run: go build .
+      - name: Build quickget
+        run: go build ./cmd/quickget
+
+      - name: Build quickget-agent
+        run: go build ./cmd/quickget-agent
 
       - name: Run tests
         run: go test ./...
