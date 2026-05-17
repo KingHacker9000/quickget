@@ -189,7 +189,15 @@ func (s *Server) handleProfilerRun(w http.ResponseWriter, r *http.Request) {
 		writeMethodNotAllowed(w, http.MethodPost)
 		return
 	}
-	if err := s.manager.StartProfilerRun(); err != nil {
+	req := ProfilerRunRequest{}
+	if r.Body != nil && r.ContentLength != 0 {
+		parsed, ok := decodeJSONBody[ProfilerRunRequest](w, r)
+		if !ok {
+			return
+		}
+		req = parsed
+	}
+	if err := s.manager.StartProfilerRun(req); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "already running") {
 			writeError(w, http.StatusConflict, "invalid_state", err.Error())
 			return

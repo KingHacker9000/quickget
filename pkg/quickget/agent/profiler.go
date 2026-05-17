@@ -7,17 +7,22 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"quickget/pkg/quickget/bench"
 )
 
 const (
-	profilerDefaultURL       = "https://proof.ovh.net/files/1Gb.dat"
-	profilerDefaultRepeats   = 2
-	profilerDefaultSizeLabel = "100MB"
-	profilerDefaultSizeBytes = int64(100 * 1024 * 1024)
+	profilerDefaultURL     = "https://proof.ovh.net/files/1Gb.dat"
+	profilerDefaultRepeats = 2
 )
+
+var profileAllowedSizes = map[string]int64{
+	"10MB":  10 * 1024 * 1024,
+	"100MB": 100 * 1024 * 1024,
+	"1GB":   1024 * 1024 * 1024,
+}
 
 type ProfilerRecommendation struct {
 	Connections int   `json:"connections"`
@@ -42,41 +47,84 @@ type ProfilerState struct {
 	Artifacts      *ProfilerArtifacts      `json:"artifacts,omitempty"`
 }
 
+type ProfilerRunRequest struct {
+	Level   string `json:"level,omitempty"`
+	Sizes   string `json:"sizes,omitempty"`
+	Repeats int    `json:"repeats,omitempty"`
+	URL     string `json:"url,omitempty"`
+}
+
 type profilerRunResult struct {
 	Recommendation ProfilerRecommendation
 	Artifacts      ProfilerArtifacts
 }
 
 type profilerRunner interface {
-	Run(ctx context.Context, runID string, emit func(stage, msg string, data map[string]any)) (profilerRunResult, error)
+	Run(ctx context.Context, req ProfilerRunRequest, runID string, emit func(stage, msg string, data map[string]any)) (profilerRunResult, error)
 }
 
 type defaultProfilerRunner struct{}
 
-func (defaultProfilerRunner) Run(ctx context.Context, runID string, emit func(stage, msg string, data map[string]any)) (profilerRunResult, error) {
-	emit("prepare", "Preparing benchmark configurations...", map[string]any{
+func (defaultProfilerRunner) Run(ctx context.Context, req ProfilerRunRequest, runID string, emit func(stage, msg string, data map[string]any)) (profilerRunResult, error) {
+	level := strings.ToLower(strings.TrimSpace(req.Level))
+	if level == "" {
+		level = "normal"
+	}
+	if level != "quick" && level != "normal" && level != "exhaustive" {
+		return profilerRunResult{}, fmt.Errorf("invalid level %q: allowed quick, normal, exhaustive", req.Level)
+	}
+
+	repeats := req.Repeats
+	if repeats <= 0 {
+		repeats = profilerDefaultRepeats
+	}
+	sizes, err := parseSizesCSV(req.Sizes)
+	if err != nil {
+		return profilerRunResult{}, err
+	}
+	sourceURL := strings.TrimSpace(req.URL)
+	if sourceURL == "" {
+		sourceURL = profilerDefaultURL
+	}
+
+	configs := buildProfilerConfigs(level, sourceURL, sizes)
+	if len(configs) == 0 {
+		return profilerRunResult{}, fmt.Errorf("no benchmark configurations generated")
+	}
+
+	emit("prepare", fmt.Sprintf("Prepared profile run: level=%s sizes=%s repeats=%d", level, strings.Join(sizes, ","), repeats), map[string]any{
 		"run_id":     runID,
-		"size_label": profilerDefaultSizeLabel,
 		"step_index": 1,
-		"step_total": 4,
+		"step_total": len(configs)*repeats + 2,
+		"level":      level,
+		"sizes":      sizes,
+		"repeats":    repeats,
+		"url":        sourceURL,
 	})
-	configs := buildProfilerConfigs()
-	results := make([]bench.BenchmarkResult, 0, len(configs)*profilerDefaultRepeats)
-	totalRuns := len(configs) * profilerDefaultRepeats
+	results := make([]bench.BenchmarkResult, 0, len(configs)*repeats)
+	totalRuns := len(configs) * repeats
 	step := 1
+	start := time.Now()
 	for _, cfg := range configs {
-		for repeat := 1; repeat <= profilerDefaultRepeats; repeat++ {
+		for repeat := 1; repeat <= repeats; repeat++ {
 			select {
 			case <-ctx.Done():
 				return profilerRunResult{}, ctx.Err()
 			default:
 			}
 			step++
-			emit("benchmark", fmt.Sprintf("Running config c=%d q=%t seg=%d buf=%d http=%s (%d/%d)", cfg.Connections, cfg.QueueMode, cfg.SegmentSize, cfg.BufferSize, cfg.HTTPMode, step-1, totalRuns+2), map[string]any{
+			elapsed := time.Since(start)
+			var eta time.Duration
+			if step > 1 {
+				avg := elapsed / time.Duration(step-1)
+				eta = avg * time.Duration(totalRuns-(step-1))
+			}
+			emit("benchmark", fmt.Sprintf("Run %d/%d size=%s n=%d seg=%s buf=%s http=%s repeat=%d/%d ETA=%s", step-1, totalRuns, cfg.TestSizeLabel, cfg.Connections, formatBytesShort(cfg.SegmentSize), formatBytesShort(int64(cfg.BufferSize)), cfg.HTTPMode, repeat, repeats, formatETA(eta)), map[string]any{
 				"run_id":     runID,
-				"size_label": profilerDefaultSizeLabel,
+				"size_label": cfg.TestSizeLabel,
 				"step_index": step - 1,
 				"step_total": totalRuns + 2,
+				"level":      level,
 			})
 			cfg.RepeatIndex = repeat
 			results = append(results, bench.RunBenchmark(ctx, cfg))
@@ -85,7 +133,6 @@ func (defaultProfilerRunner) Run(ctx context.Context, runID string, emit func(st
 
 	emit("aggregate", "Selecting best recommendation...", map[string]any{
 		"run_id":     runID,
-		"size_label": profilerDefaultSizeLabel,
 		"step_index": totalRuns + 1,
 		"step_total": totalRuns + 2,
 	})
@@ -96,7 +143,6 @@ func (defaultProfilerRunner) Run(ctx context.Context, runID string, emit func(st
 
 	emit("persist", "Writing profiler artifacts...", map[string]any{
 		"run_id":     runID,
-		"size_label": profilerDefaultSizeLabel,
 		"step_index": totalRuns + 2,
 		"step_total": totalRuns + 2,
 	})
@@ -107,12 +153,42 @@ func (defaultProfilerRunner) Run(ctx context.Context, runID string, emit func(st
 	return profilerRunResult{Recommendation: recommendation, Artifacts: artifacts}, nil
 }
 
-func buildProfilerConfigs() []bench.BenchmarkConfig {
-	raw := []bench.BenchmarkConfig{
-		{TestSizeLabel: profilerDefaultSizeLabel, TargetBytes: profilerDefaultSizeBytes, SourceURL: profilerDefaultURL, Connections: 2, QueueMode: true, SegmentSize: 8 * 1024 * 1024, BufferSize: 512 * 1024, HTTPMode: "auto"},
-		{TestSizeLabel: profilerDefaultSizeLabel, TargetBytes: profilerDefaultSizeBytes, SourceURL: profilerDefaultURL, Connections: 4, QueueMode: true, SegmentSize: 8 * 1024 * 1024, BufferSize: 1024 * 1024, HTTPMode: "auto"},
-		{TestSizeLabel: profilerDefaultSizeLabel, TargetBytes: profilerDefaultSizeBytes, SourceURL: profilerDefaultURL, Connections: 8, QueueMode: true, SegmentSize: 16 * 1024 * 1024, BufferSize: 1024 * 1024, HTTPMode: "auto"},
-		{TestSizeLabel: profilerDefaultSizeLabel, TargetBytes: profilerDefaultSizeBytes, SourceURL: profilerDefaultURL, Connections: 8, QueueMode: true, SegmentSize: 16 * 1024 * 1024, BufferSize: 1024 * 1024, HTTPMode: "http1"},
+func buildProfilerConfigs(level, url string, sizes []string) []bench.BenchmarkConfig {
+	conns := []int{1, 2, 4, 8}
+	segments := []int64{4 * 1024 * 1024, 8 * 1024 * 1024, 16 * 1024 * 1024}
+	buffers := []int{512 * 1024, 1024 * 1024}
+	if level == "normal" {
+		conns = []int{1, 2, 4, 8, 12, 16, 24, 32}
+		segments = []int64{2 * 1024 * 1024, 4 * 1024 * 1024, 8 * 1024 * 1024, 16 * 1024 * 1024, 32 * 1024 * 1024}
+		buffers = []int{256 * 1024, 512 * 1024, 1024 * 1024, 2 * 1024 * 1024}
+	}
+	if level == "exhaustive" {
+		conns = []int{1, 2, 4, 8, 12, 16, 24, 32}
+		segments = []int64{1 * 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024, 8 * 1024 * 1024, 16 * 1024 * 1024, 32 * 1024 * 1024, 64 * 1024 * 1024}
+		buffers = []int{256 * 1024, 512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024}
+	}
+	modes := []string{"auto", "http1"}
+	raw := make([]bench.BenchmarkConfig, 0, len(sizes)*len(conns)*len(segments)*len(buffers)*len(modes))
+	for _, sizeLabel := range sizes {
+		targetBytes := profileAllowedSizes[sizeLabel]
+		for _, c := range conns {
+			for _, s := range segments {
+				for _, b := range buffers {
+					for _, m := range modes {
+						raw = append(raw, bench.BenchmarkConfig{
+							TestSizeLabel: sizeLabel,
+							TargetBytes:   targetBytes,
+							SourceURL:     url,
+							Connections:   c,
+							QueueMode:     true,
+							SegmentSize:   s,
+							BufferSize:    b,
+							HTTPMode:      m,
+						})
+					}
+				}
+			}
+		}
 	}
 	return bench.PruneBenchmarkConfigs(raw)
 }
@@ -225,6 +301,8 @@ func writeRawCSV(path string, results []bench.BenchmarkResult) error {
 
 func writeSummaryCSV(path string, results []bench.BenchmarkResult) error {
 	type row struct {
+		SizeLabel   string
+		TargetBytes int64
 		Connections int
 		QueueMode   bool
 		SegmentSize int64
@@ -245,6 +323,8 @@ func writeSummaryCSV(path string, results []bench.BenchmarkResult) error {
 		if !ok {
 			current = &aggregate{
 				row: row{
+					SizeLabel:   r.TestSizeLabel,
+					TargetBytes: r.TargetBytes,
 					Connections: r.Connections,
 					QueueMode:   r.QueueMode,
 					SegmentSize: r.SegmentSize,
@@ -287,8 +367,8 @@ func writeSummaryCSV(path string, results []bench.BenchmarkResult) error {
 	for i, r := range rows {
 		if err := w.Write([]string{
 			fmt.Sprintf("%d", i+1),
-			profilerDefaultSizeLabel,
-			fmt.Sprintf("%d", profilerDefaultSizeBytes),
+			r.SizeLabel,
+			fmt.Sprintf("%d", r.TargetBytes),
 			fmt.Sprintf("%d", r.Connections),
 			fmt.Sprintf("%t", r.QueueMode),
 			fmt.Sprintf("%d", r.SegmentSize),
@@ -302,4 +382,53 @@ func writeSummaryCSV(path string, results []bench.BenchmarkResult) error {
 		}
 	}
 	return nil
+}
+
+func parseSizesCSV(raw string) ([]string, error) {
+	input := strings.TrimSpace(raw)
+	if input == "" {
+		input = "10MB,100MB,1GB"
+	}
+	parts := strings.Split(input, ",")
+	out := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		size := strings.ToUpper(strings.TrimSpace(part))
+		if size == "" {
+			continue
+		}
+		if _, ok := profileAllowedSizes[size]; !ok {
+			return nil, fmt.Errorf("invalid size %q: allowed 10MB,100MB,1GB", size)
+		}
+		if seen[size] {
+			continue
+		}
+		seen[size] = true
+		out = append(out, size)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("at least one size is required")
+	}
+	return out, nil
+}
+
+func formatBytesShort(b int64) string {
+	if b%(1024*1024) == 0 {
+		return fmt.Sprintf("%dMB", b/(1024*1024))
+	}
+	if b%1024 == 0 {
+		return fmt.Sprintf("%dKB", b/1024)
+	}
+	return fmt.Sprintf("%dB", b)
+}
+
+func formatETA(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	sec := int64(d.Round(time.Second).Seconds())
+	h := sec / 3600
+	m := (sec % 3600) / 60
+	s := sec % 60
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }

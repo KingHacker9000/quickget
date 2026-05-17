@@ -28,7 +28,7 @@ func newTestAgentServer(t *testing.T, dl *fakeDownloader) *httptest.Server {
 
 type fakeProfilerRunner struct{}
 
-func (fakeProfilerRunner) Run(ctx context.Context, runID string, emit func(stage, msg string, data map[string]any)) (profilerRunResult, error) {
+func (fakeProfilerRunner) Run(ctx context.Context, req ProfilerRunRequest, runID string, emit func(stage, msg string, data map[string]any)) (profilerRunResult, error) {
 	emit("prepare", "prep", map[string]any{"run_id": runID, "step_index": 1, "step_total": 2})
 	select {
 	case <-ctx.Done():

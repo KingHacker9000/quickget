@@ -384,7 +384,7 @@ func (m *Manager) GetProfilerState() ProfilerState {
 	return m.profiler
 }
 
-func (m *Manager) StartProfilerRun() error {
+func (m *Manager) StartProfilerRun(req ProfilerRunRequest) error {
 	m.mu.Lock()
 	if m.profiler.Status == "running" {
 		m.mu.Unlock()
@@ -406,13 +406,13 @@ func (m *Manager) StartProfilerRun() error {
 		"timestamp": now.Format(time.RFC3339),
 	})
 
-	go m.runProfiler(runID, runner)
+	go m.runProfiler(req, runID, runner)
 	return nil
 }
 
-func (m *Manager) runProfiler(runID string, runner profilerRunner) {
+func (m *Manager) runProfiler(req ProfilerRunRequest, runID string, runner profilerRunner) {
 	ctx := context.Background()
-	result, err := runner.Run(ctx, runID, func(stage, msg string, data map[string]any) {
+	result, err := runner.Run(ctx, req, runID, func(stage, msg string, data map[string]any) {
 		payload := map[string]any{
 			"run_id":    runID,
 			"stage":     stage,
