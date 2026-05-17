@@ -21,8 +21,25 @@ func newTestAgentServer(t *testing.T, dl *fakeDownloader) *httptest.Server {
 	t.Helper()
 	m := NewManager(&fakeStore{})
 	m.SetDownloader(dl)
+	m.SetProfilerRunner(fakeProfilerRunner{})
 	s := NewServer(m, testBearerToken, "test")
 	return httptest.NewServer(s)
+}
+
+type fakeProfilerRunner struct{}
+
+func (fakeProfilerRunner) Run(ctx context.Context, runID string, emit func(stage, msg string, data map[string]any)) (profilerRunResult, error) {
+	emit("prepare", "prep", map[string]any{"run_id": runID, "step_index": 1, "step_total": 2})
+	select {
+	case <-ctx.Done():
+		return profilerRunResult{}, ctx.Err()
+	case <-time.After(120 * time.Millisecond):
+	}
+	emit("benchmark", "bench", map[string]any{"run_id": runID, "step_index": 2, "step_total": 2})
+	return profilerRunResult{
+		Recommendation: ProfilerRecommendation{Connections: 4, QueueMode: true, SegmentSize: 16777216, BufferSize: 1048576, HTTP1: false},
+		Artifacts:      ProfilerArtifacts{ProfileDir: ".quickget/profiles/test", RawCSV: ".quickget/profiles/test/raw_results.csv", SummaryCSV: ".quickget/profiles/test/summary.csv"},
+	}, nil
 }
 
 func authReq(t *testing.T, method, url string, body io.Reader) *http.Request {
@@ -262,6 +279,54 @@ func TestServerIntegrationHTTPAPI(t *testing.T) {
 			t.Fatalf("stream read error: %v", err)
 		case <-sseCtx.Done():
 			t.Fatal("timed out waiting for SSE event")
+		}
+	})
+
+	t.Run("GET /profiler returns state", func(t *testing.T) {
+		resp, err := client.Do(authReq(t, http.MethodGet, srv.URL+"/profiler", nil))
+		if err != nil {
+			t.Fatalf("GET /profiler: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d", resp.StatusCode)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode /profiler: %v", err)
+		}
+		if _, ok := body["status"]; !ok {
+			t.Fatalf("expected status field in /profiler response")
+		}
+	})
+
+	t.Run("POST /profiler/run starts profiler and conflicts while running", func(t *testing.T) {
+		resp, err := client.Do(authReq(t, http.MethodPost, srv.URL+"/profiler/run", bytes.NewReader([]byte(`{}`))))
+		if err != nil {
+			t.Fatalf("POST /profiler/run: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("status=%d", resp.StatusCode)
+		}
+
+		respConflict, err := client.Do(authReq(t, http.MethodPost, srv.URL+"/profiler/run", bytes.NewReader([]byte(`{}`))))
+		if err != nil {
+			t.Fatalf("POST /profiler/run conflict: %v", err)
+		}
+		defer respConflict.Body.Close()
+		if respConflict.StatusCode != http.StatusConflict {
+			t.Fatalf("expected conflict, got status=%d", respConflict.StatusCode)
+		}
+
+		time.Sleep(150 * time.Millisecond)
+		resp2, err := client.Do(authReq(t, http.MethodGet, srv.URL+"/profiler", nil))
+		if err != nil {
+			t.Fatalf("GET /profiler after run: %v", err)
+		}
+		defer resp2.Body.Close()
+		if resp2.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d", resp2.StatusCode)
 		}
 	})
 

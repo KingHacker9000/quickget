@@ -19,6 +19,11 @@ const (
 	EventDownloadCompleted = "download.completed"
 	EventDownloadFailed    = "download.failed"
 	EventAgentReady        = "agent.ready"
+	EventProfilerStarted   = "profiler.started"
+	EventProfilerStage     = "profiler.stage"
+	EventProfilerLog       = "profiler.log"
+	EventProfilerCompleted = "profiler.completed"
+	EventProfilerFailed    = "profiler.failed"
 )
 
 type Event struct {
@@ -38,6 +43,7 @@ type Event struct {
 	Message     string                `json:"message"`
 	Error       string                `json:"error"`
 	Suggestion  string                `json:"suggestion"`
+	Data        map[string]any        `json:"data,omitempty"`
 }
 
 type Emitter struct {

@@ -105,6 +105,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/profiler" {
+		s.handleProfiler(w, r)
+		return
+	}
+
+	if r.URL.Path == "/profiler/run" {
+		s.handleProfilerRun(w, r)
+		return
+	}
+
 	if r.URL.Path == "/events" {
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
@@ -164,6 +174,30 @@ func (s *Server) handleDownloadsCollection(w http.ResponseWriter, r *http.Reques
 	default:
 		writeMethodNotAllowed(w, http.MethodGet, http.MethodPost)
 	}
+}
+
+func (s *Server) handleProfiler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, http.MethodGet)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.manager.GetProfilerState())
+}
+
+func (s *Server) handleProfilerRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if err := s.manager.StartProfilerRun(); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "already running") {
+			writeError(w, http.StatusConflict, "invalid_state", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, s.manager.GetProfilerState())
 }
 
 func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {

@@ -50,6 +50,8 @@ type Manager struct {
 	dl                 Downloader
 	progressIntervalMs int
 	debugProgress      bool
+	profilerRunner     profilerRunner
+	profiler           ProfilerState
 }
 
 func NewManager(store Store) *Manager {
@@ -61,7 +63,19 @@ func NewManager(store Store) *Manager {
 		dl:                 coreDownloader{},
 		progressIntervalMs: readAgentProgressIntervalMs(),
 		debugProgress:      debugProgressEnabled(),
+		profilerRunner:     defaultProfilerRunner{},
+		profiler:           ProfilerState{Status: "idle"},
 	}
+}
+
+func (m *Manager) SetProfilerRunner(runner profilerRunner) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if runner == nil {
+		m.profilerRunner = defaultProfilerRunner{}
+		return
+	}
+	m.profilerRunner = runner
 }
 
 func (m *Manager) SetDownloader(dl Downloader) {
@@ -361,6 +375,99 @@ func (m *Manager) SaveState() error {
 		Version:   1,
 		Downloads: snaps,
 		UpdatedAt: time.Now().UTC(),
+	})
+}
+
+func (m *Manager) GetProfilerState() ProfilerState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.profiler
+}
+
+func (m *Manager) StartProfilerRun() error {
+	m.mu.Lock()
+	if m.profiler.Status == "running" {
+		m.mu.Unlock()
+		return fmt.Errorf("profiler already running")
+	}
+	runID := NewJobID()
+	now := time.Now().UTC()
+	m.profiler.Status = "running"
+	m.profiler.RunID = runID
+	m.profiler.LastError = ""
+	m.profiler.LastRunAt = &now
+	m.profiler.Artifacts = nil
+	m.profiler.Recommendation = nil
+	runner := m.profilerRunner
+	m.mu.Unlock()
+
+	m.publishProfilerEvent(events.EventProfilerStarted, "Profiler run started.", map[string]any{
+		"run_id":    runID,
+		"timestamp": now.Format(time.RFC3339),
+	})
+
+	go m.runProfiler(runID, runner)
+	return nil
+}
+
+func (m *Manager) runProfiler(runID string, runner profilerRunner) {
+	ctx := context.Background()
+	result, err := runner.Run(ctx, runID, func(stage, msg string, data map[string]any) {
+		payload := map[string]any{
+			"run_id":    runID,
+			"stage":     stage,
+			"message":   msg,
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+		}
+		for k, v := range data {
+			payload[k] = v
+		}
+		m.publishProfilerEvent(events.EventProfilerStage, msg, payload)
+		m.publishProfilerEvent(events.EventProfilerLog, msg, payload)
+	})
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	m.profiler.LastRunAt = &now
+	if err != nil {
+		m.profiler.Status = "error"
+		m.profiler.LastError = err.Error()
+		m.publishProfilerEvent(events.EventProfilerFailed, err.Error(), map[string]any{
+			"run_id":    runID,
+			"message":   err.Error(),
+			"timestamp": now.Format(time.RFC3339),
+		})
+		return
+	}
+	m.profiler.Status = "ready"
+	m.profiler.LastError = ""
+	m.profiler.Recommendation = &result.Recommendation
+	m.profiler.Artifacts = &result.Artifacts
+	m.publishProfilerEvent(events.EventProfilerCompleted, "Profiler run completed.", map[string]any{
+		"run_id": runID,
+		"recommendation": map[string]any{
+			"connections": result.Recommendation.Connections,
+			"queueMode":   result.Recommendation.QueueMode,
+			"segmentSize": result.Recommendation.SegmentSize,
+			"bufferSize":  result.Recommendation.BufferSize,
+			"http1":       result.Recommendation.HTTP1,
+		},
+		"artifacts": map[string]any{
+			"profileDir": result.Artifacts.ProfileDir,
+			"rawCsv":     result.Artifacts.RawCSV,
+			"summaryCsv": result.Artifacts.SummaryCSV,
+		},
+		"timestamp": now.Format(time.RFC3339),
+	})
+}
+
+func (m *Manager) publishProfilerEvent(eventType, msg string, data map[string]any) {
+	m.bus.Publish(events.Event{
+		Type:      eventType,
+		Timestamp: time.Now().UTC(),
+		Message:   msg,
+		Data:      data,
 	})
 }
 
