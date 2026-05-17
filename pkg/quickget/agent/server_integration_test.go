@@ -319,6 +319,15 @@ func TestServerIntegrationHTTPAPI(t *testing.T) {
 			t.Fatalf("expected conflict, got status=%d", respConflict.StatusCode)
 		}
 
+		respCancel, err := client.Do(authReq(t, http.MethodPost, srv.URL+"/profiler/cancel", bytes.NewReader([]byte(`{}`))))
+		if err != nil {
+			t.Fatalf("POST /profiler/cancel: %v", err)
+		}
+		defer respCancel.Body.Close()
+		if respCancel.StatusCode != http.StatusAccepted {
+			t.Fatalf("expected accepted from cancel, got status=%d", respCancel.StatusCode)
+		}
+
 		time.Sleep(150 * time.Millisecond)
 		resp2, err := client.Do(authReq(t, http.MethodGet, srv.URL+"/profiler", nil))
 		if err != nil {

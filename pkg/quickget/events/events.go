@@ -24,6 +24,7 @@ const (
 	EventProfilerLog       = "profiler.log"
 	EventProfilerCompleted = "profiler.completed"
 	EventProfilerFailed    = "profiler.failed"
+	EventProfilerCancelled = "profiler.cancelled"
 )
 
 type Event struct {

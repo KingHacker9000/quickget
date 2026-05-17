@@ -115,6 +115,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/profiler/cancel" {
+		s.handleProfilerCancel(w, r)
+		return
+	}
+
 	if r.URL.Path == "/events" {
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
@@ -199,6 +204,22 @@ func (s *Server) handleProfilerRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.manager.StartProfilerRun(req); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "already running") {
+			writeError(w, http.StatusConflict, "invalid_state", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, s.manager.GetProfilerState())
+}
+
+func (s *Server) handleProfilerCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if err := s.manager.CancelProfilerRun(); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not running") {
 			writeError(w, http.StatusConflict, "invalid_state", err.Error())
 			return
 		}

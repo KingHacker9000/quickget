@@ -52,6 +52,7 @@ type Manager struct {
 	debugProgress      bool
 	profilerRunner     profilerRunner
 	profiler           ProfilerState
+	profilerCancel     context.CancelFunc
 }
 
 func NewManager(store Store) *Manager {
@@ -398,6 +399,8 @@ func (m *Manager) StartProfilerRun(req ProfilerRunRequest) error {
 	m.profiler.LastRunAt = &now
 	m.profiler.Artifacts = nil
 	m.profiler.Recommendation = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	m.profilerCancel = cancel
 	runner := m.profilerRunner
 	m.mu.Unlock()
 
@@ -406,12 +409,24 @@ func (m *Manager) StartProfilerRun(req ProfilerRunRequest) error {
 		"timestamp": now.Format(time.RFC3339),
 	})
 
-	go m.runProfiler(req, runID, runner)
+	go m.runProfiler(ctx, req, runID, runner)
 	return nil
 }
 
-func (m *Manager) runProfiler(req ProfilerRunRequest, runID string, runner profilerRunner) {
-	ctx := context.Background()
+func (m *Manager) CancelProfilerRun() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.profiler.Status != "running" {
+		return fmt.Errorf("profiler is not running")
+	}
+	if m.profilerCancel == nil {
+		return fmt.Errorf("profiler cancel handler unavailable")
+	}
+	m.profilerCancel()
+	return nil
+}
+
+func (m *Manager) runProfiler(ctx context.Context, req ProfilerRunRequest, runID string, runner profilerRunner) {
 	result, err := runner.Run(ctx, req, runID, func(stage, msg string, data map[string]any) {
 		payload := map[string]any{
 			"run_id":    runID,
@@ -428,9 +443,20 @@ func (m *Manager) runProfiler(req ProfilerRunRequest, runID string, runner profi
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.profilerCancel = nil
 	now := time.Now().UTC()
 	m.profiler.LastRunAt = &now
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			m.profiler.Status = "idle"
+			m.profiler.LastError = ""
+			m.publishProfilerEvent(events.EventProfilerCancelled, "Profiler run cancelled.", map[string]any{
+				"run_id":    runID,
+				"message":   "Profiler run cancelled.",
+				"timestamp": now.Format(time.RFC3339),
+			})
+			return
+		}
 		m.profiler.Status = "error"
 		m.profiler.LastError = err.Error()
 		m.publishProfilerEvent(events.EventProfilerFailed, err.Error(), map[string]any{
