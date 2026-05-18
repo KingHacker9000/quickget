@@ -36,6 +36,25 @@ type envelopeCaptureRequest struct {
 	Payload api.BrowserCaptureRequest `json:"payload"`
 }
 
+type browserCaptureExtensionPayload struct {
+	URL              string `json:"url"`
+	FinalURL         string `json:"finalUrl"`
+	Referrer         string `json:"referrer"`
+	FileName         string `json:"fileName"`
+	MIMEType         string `json:"mimeType"`
+	TotalBytes       int64  `json:"totalBytes"`
+	PageURL          string `json:"pageUrl"`
+	TabTitle         string `json:"tabTitle"`
+	ChromeDownloadID int    `json:"chromeDownloadId"`
+	Cookies          string `json:"cookies"`
+	CaptureMode      string `json:"captureMode"`
+}
+
+type envelopeRawCaptureRequest struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
 type hostConfig struct {
 	QDMExecutablePath   string `json:"qdm_executable_path"`
 	AgentExecutablePath string `json:"agent_executable_path"`
@@ -135,6 +154,56 @@ func (h *Host) handleBrowserCapture(ctx context.Context, payload []byte) error {
 			req.BrowserCaptureRequest = wrapped.Payload
 		}
 	}
+	if strings.TrimSpace(req.URL) == "" || strings.TrimSpace(req.CaptureMode) == "" {
+		var wrappedRaw envelopeRawCaptureRequest
+		if err := json.Unmarshal(payload, &wrappedRaw); err == nil && len(wrappedRaw.Payload) > 0 {
+			var ext browserCaptureExtensionPayload
+			if err := json.Unmarshal(wrappedRaw.Payload, &ext); err == nil {
+				if strings.TrimSpace(req.URL) == "" {
+					req.URL = strings.TrimSpace(ext.URL)
+				}
+				if strings.TrimSpace(req.FinalURL) == "" {
+					req.FinalURL = strings.TrimSpace(ext.FinalURL)
+				}
+				if strings.TrimSpace(req.Referrer) == "" {
+					req.Referrer = strings.TrimSpace(ext.Referrer)
+				}
+				if strings.TrimSpace(req.SuggestedFilename) == "" {
+					req.SuggestedFilename = strings.TrimSpace(ext.FileName)
+				}
+				if strings.TrimSpace(req.MIMEType) == "" {
+					req.MIMEType = strings.TrimSpace(ext.MIMEType)
+				}
+				if req.TotalBytes == 0 && ext.TotalBytes > 0 {
+					req.TotalBytes = ext.TotalBytes
+				}
+				if strings.TrimSpace(req.PageURL) == "" {
+					req.PageURL = strings.TrimSpace(ext.PageURL)
+				}
+				if strings.TrimSpace(req.TabTitle) == "" {
+					req.TabTitle = strings.TrimSpace(ext.TabTitle)
+				}
+				if req.ChromeDownloadID == 0 && ext.ChromeDownloadID != 0 {
+					req.ChromeDownloadID = ext.ChromeDownloadID
+				}
+				if strings.TrimSpace(req.Cookies) == "" {
+					req.Cookies = ext.Cookies
+				}
+				if strings.TrimSpace(req.CaptureMode) == "" {
+					req.CaptureMode = strings.TrimSpace(ext.CaptureMode)
+				}
+			}
+		}
+	}
+	if strings.TrimSpace(req.Source) == "" {
+		req.Source = "chrome-auto-capture"
+	}
+	if strings.TrimSpace(req.Browser) == "" {
+		req.Browser = "chrome"
+	}
+	if strings.TrimSpace(req.CaptureMode) == "" {
+		req.CaptureMode = "ask"
+	}
 	if strings.TrimSpace(req.URL) == "" {
 		return WriteMessage(h.out, map[string]any{
 			"type":    "browser_capture_result",
@@ -162,12 +231,13 @@ func (h *Host) handleBrowserCapture(ctx context.Context, payload []byte) error {
 	capture, err := client.CreateCapture(ctx, req.BrowserCaptureRequest)
 	if err != nil {
 		h.errLog.Printf("capture forward failed type=browser_capture url=%s source=%s browser=%s err=%v", req.URL, req.Source, req.Browser, err)
+		msg := fmt.Sprintf("failed to forward capture to quickget-agent: %v", err)
 		return WriteMessage(h.out, map[string]any{
 			"type":              "browser_capture_result",
 			"ok":                false,
 			"client_request_id": req.ClientRequestID,
-			"error":             "failed to forward capture to quickget-agent",
-			"message":           "failed to forward capture to quickget-agent",
+			"error":             msg,
+			"message":           msg,
 		})
 	}
 
