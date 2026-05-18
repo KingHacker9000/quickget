@@ -105,11 +105,12 @@ func (h *Host) handleRequest(ctx context.Context, reqType string, payload []byte
 
 func (h *Host) handleStatus(ctx context.Context) error {
 	agentRunning := h.isAgentRunning(ctx)
+	qdmRunning := agentRunning
 	resp := map[string]any{
 		"type":          "status",
 		"ok":            true,
 		"agent_running": agentRunning,
-		"qdm_running":   false,
+		"qdm_running":   qdmRunning,
 		"message":       "QuickGet agent status checked",
 	}
 	if !agentRunning {
