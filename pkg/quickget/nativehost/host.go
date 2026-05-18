@@ -81,15 +81,17 @@ type Host struct {
 }
 
 func NewHost(in io.Reader, out io.Writer, errWriter io.Writer) *Host {
+	logWriter := io.MultiWriter(errWriter, openDebugLogWriter())
 	return &Host{
 		in:       in,
 		out:      out,
-		errLog:   log.New(errWriter, "quickget-native-host: ", log.LstdFlags),
+		errLog:   log.New(logWriter, "quickget-native-host: ", log.LstdFlags|log.Lmicroseconds),
 		agentURL: defaultAgentURL,
 	}
 }
 
 func (h *Host) Serve(ctx context.Context) error {
+	h.errLog.Printf("serve started pid=%d", os.Getpid())
 	for {
 		select {
 		case <-ctx.Done():
@@ -110,6 +112,7 @@ func (h *Host) Serve(ctx context.Context) error {
 			_ = WriteMessage(h.out, map[string]any{"type": "error", "ok": false, "message": "invalid request payload"})
 			continue
 		}
+		h.errLog.Printf("request received type=%q bytes=%d", req.Type, len(payload))
 		if err := h.handleRequest(ctx, req.Type, payload); err != nil {
 			h.errLog.Printf("handle request type=%q failed: %v", req.Type, err)
 			_ = WriteMessage(h.out, map[string]any{
@@ -342,6 +345,23 @@ func startDetached(path string, args ...string) error {
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Start()
+}
+
+func openDebugLogWriter() io.Writer {
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return io.Discard
+	}
+	dir := filepath.Join(cfgDir, "QuickGet")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return io.Discard
+	}
+	path := filepath.Join(dir, "native-host-debug.log")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return io.Discard
+	}
+	return f
 }
 
 func formatCaptureForwardError(err error) string {
