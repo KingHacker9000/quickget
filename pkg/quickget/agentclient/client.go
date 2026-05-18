@@ -97,6 +97,36 @@ func (c *Client) Delete(ctx context.Context, id string, deleteFiles bool) error 
 	return c.do(ctx, http.MethodPost, "/downloads/"+id+"/delete", body, nil)
 }
 
+func (c *Client) ListCaptures(ctx context.Context) ([]api.BrowserCapture, error) {
+	var out []api.BrowserCapture
+	err := c.do(ctx, http.MethodGet, "/captures", nil, &out)
+	return out, err
+}
+
+func (c *Client) CreateCapture(ctx context.Context, req api.BrowserCaptureRequest) (api.BrowserCapture, error) {
+	var out api.BrowserCapture
+	err := c.do(ctx, http.MethodPost, "/captures", req, &out)
+	return out, err
+}
+
+func (c *Client) GetCapture(ctx context.Context, id string) (api.BrowserCapture, error) {
+	var out api.BrowserCapture
+	err := c.do(ctx, http.MethodGet, "/captures/"+id, nil, &out)
+	return out, err
+}
+
+func (c *Client) RejectCapture(ctx context.Context, id string) (api.BrowserCapture, error) {
+	var out api.BrowserCapture
+	err := c.do(ctx, http.MethodPost, "/captures/"+id+"/reject", nil, &out)
+	return out, err
+}
+
+func (c *Client) StartCaptureDownload(ctx context.Context, id string, req api.StartCaptureDownloadRequest) (map[string]any, error) {
+	var out map[string]any
+	err := c.do(ctx, http.MethodPost, "/captures/"+id+"/start", req, &out)
+	return out, err
+}
+
 func (c *Client) do(ctx context.Context, method string, path string, body any, out any) error {
 	var payload io.Reader
 	if body != nil {

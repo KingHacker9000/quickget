@@ -44,6 +44,7 @@ type runControl struct {
 type Manager struct {
 	mu                 sync.RWMutex
 	jobs               map[string]*DownloadJob
+	captures           map[string]*api.BrowserCapture
 	running            map[string]*runControl
 	bus                *EventBus
 	store              Store
@@ -58,6 +59,7 @@ type Manager struct {
 func NewManager(store Store) *Manager {
 	return &Manager{
 		jobs:               make(map[string]*DownloadJob),
+		captures:           make(map[string]*api.BrowserCapture),
 		running:            make(map[string]*runControl),
 		bus:                NewEventBus(),
 		store:              store,
@@ -67,6 +69,183 @@ func NewManager(store Store) *Manager {
 		profilerRunner:     defaultProfilerRunner{},
 		profiler:           ProfilerState{Status: "idle"},
 	}
+}
+
+func (m *Manager) CreateCapture(req api.BrowserCaptureRequest) (api.BrowserCapture, error) {
+	req.URL = strings.TrimSpace(req.URL)
+	req.Source = strings.TrimSpace(req.Source)
+	req.Browser = strings.TrimSpace(req.Browser)
+	req.CaptureMode = strings.ToLower(strings.TrimSpace(req.CaptureMode))
+	if err := validateCaptureRequest(req); err != nil {
+		return api.BrowserCapture{}, err
+	}
+
+	m.mu.Lock()
+	id := NewJobID()
+	dup := detectCaptureDuplicate(req, m.jobs)
+	capture := newCapture(id, req, dup)
+	m.captures[id] = &capture
+	m.mu.Unlock()
+
+	log.Printf("agent: capture requested id=%s source=%s browser=%s url=%s mode=%s", capture.ID, capture.Request.Source, capture.Request.Browser, capture.Request.URL, capture.Request.CaptureMode)
+	m.bus.Publish(events.Event{
+		Type:      events.EventCaptureRequested,
+		ID:        capture.ID,
+		Timestamp: time.Now().UTC(),
+		Status:    capture.Status,
+		Message:   capture.Message,
+		Data:      map[string]any{"capture": capture},
+	})
+	if dup != nil && dup.Found {
+		m.bus.Publish(events.Event{
+			Type:      events.EventCaptureDuplicateFound,
+			ID:        capture.ID,
+			Timestamp: time.Now().UTC(),
+			Status:    capture.Status,
+			Message:   "duplicate capture detected",
+			Data:      map[string]any{"capture": capture},
+		})
+	}
+	_ = m.SaveState()
+
+	return capture, nil
+}
+
+func (m *Manager) ListCaptures() []api.BrowserCapture {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]api.BrowserCapture, 0, len(m.captures))
+	for _, c := range m.captures {
+		out = append(out, *c)
+	}
+	return out
+}
+
+func (m *Manager) GetCapture(id string) (api.BrowserCapture, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	c, ok := m.captures[id]
+	if !ok {
+		return api.BrowserCapture{}, false
+	}
+	return *c, true
+}
+
+func (m *Manager) RejectCapture(id string) (api.BrowserCapture, error) {
+	m.mu.Lock()
+	c, ok := m.captures[id]
+	if !ok {
+		m.mu.Unlock()
+		return api.BrowserCapture{}, fmt.Errorf("capture not found: %s", id)
+	}
+	if c.Status == CaptureStatusStarted || c.Status == CaptureStatusAccepted {
+		m.mu.Unlock()
+		return api.BrowserCapture{}, fmt.Errorf("capture cannot be rejected from status %s", c.Status)
+	}
+	c.Status = CaptureStatusRejected
+	c.Message = "capture rejected by client"
+	c.UpdatedAt = time.Now().UTC()
+	snap := *c
+	m.mu.Unlock()
+
+	m.bus.Publish(events.Event{
+		Type:      events.EventCaptureRejected,
+		ID:        snap.ID,
+		Timestamp: time.Now().UTC(),
+		Status:    snap.Status,
+		Message:   snap.Message,
+		Data:      map[string]any{"capture": snap},
+	})
+	_ = m.SaveState()
+	return snap, nil
+}
+
+func (m *Manager) StartCaptureDownload(id string, req api.StartCaptureDownloadRequest) (api.BrowserCapture, api.DownloadSnapshot, error) {
+	m.mu.Lock()
+	c, ok := m.captures[id]
+	if !ok {
+		m.mu.Unlock()
+		return api.BrowserCapture{}, api.DownloadSnapshot{}, fmt.Errorf("capture not found: %s", id)
+	}
+	if c.Status == CaptureStatusRejected || c.Status == CaptureStatusExpired || c.Status == CaptureStatusStarted {
+		m.mu.Unlock()
+		return api.BrowserCapture{}, api.DownloadSnapshot{}, fmt.Errorf("capture cannot be started from status %s", c.Status)
+	}
+	captureReq := c.Request
+	m.mu.Unlock()
+
+	downloadReq := api.CreateDownloadRequest{
+		URL:        captureReq.URL,
+		OutputPath: strings.TrimSpace(req.OutputPath),
+		Directory:  strings.TrimSpace(req.Directory),
+	}
+	if downloadReq.OutputPath == "" && strings.TrimSpace(captureReq.SuggestedFilename) != "" {
+		downloadReq.OutputPath = strings.TrimSpace(captureReq.SuggestedFilename)
+	}
+	if req.Options != nil {
+		opts := *req.Options
+		if strings.TrimSpace(opts.URL) == "" {
+			opts.URL = downloadReq.URL
+		}
+		if strings.TrimSpace(opts.OutputPath) == "" {
+			opts.OutputPath = downloadReq.OutputPath
+		}
+		if strings.TrimSpace(opts.Directory) == "" {
+			opts.Directory = downloadReq.Directory
+		}
+		downloadReq = opts
+	}
+
+	action := strings.ToLower(strings.TrimSpace(req.DuplicateAction))
+	if action == "" {
+		action = "new_name"
+	}
+	switch action {
+	case "overwrite", "new_name", "show_existing":
+	default:
+		return api.BrowserCapture{}, api.DownloadSnapshot{}, errors.New("duplicate_action must be overwrite, new_name, or show_existing")
+	}
+	if action == "show_existing" {
+		return api.BrowserCapture{}, api.DownloadSnapshot{}, errors.New("duplicate_action show_existing is informational and cannot start download")
+	}
+	if action == "new_name" && strings.TrimSpace(downloadReq.OutputPath) != "" && strings.TrimSpace(downloadReq.Directory) != "" {
+		candidate := filepath.Join(strings.TrimSpace(downloadReq.Directory), strings.TrimSpace(downloadReq.OutputPath))
+		if _, err := os.Stat(candidate); err == nil {
+			downloadReq.OutputPath = makeNonConflictingName(downloadReq.OutputPath)
+		}
+	}
+
+	snap, err := m.CreateDownload(downloadReq)
+	if err != nil {
+		return api.BrowserCapture{}, api.DownloadSnapshot{}, err
+	}
+	created, _ := m.Get(snap.ID)
+
+	m.mu.Lock()
+	c, ok = m.captures[id]
+	if !ok {
+		m.mu.Unlock()
+		return api.BrowserCapture{}, api.DownloadSnapshot{}, fmt.Errorf("capture not found: %s", id)
+	}
+	c.Status = CaptureStatusStarted
+	c.Message = "capture accepted and download started"
+	c.UpdatedAt = time.Now().UTC()
+	captureSnap := *c
+	m.mu.Unlock()
+
+	m.bus.Publish(events.Event{
+		Type:      events.EventCaptureStarted,
+		ID:        captureSnap.ID,
+		Timestamp: time.Now().UTC(),
+		Status:    captureSnap.Status,
+		Message:   captureSnap.Message,
+		Data: map[string]any{
+			"capture":     captureSnap,
+			"download_id": created.ID,
+		},
+	})
+	_ = m.SaveState()
+	return captureSnap, created, nil
 }
 
 func (m *Manager) SetProfilerRunner(runner profilerRunner) {
@@ -348,6 +527,11 @@ func (m *Manager) LoadState() error {
 		}
 		m.jobs[job.ID] = job
 	}
+	m.captures = make(map[string]*api.BrowserCapture, len(state.Captures))
+	for i := range state.Captures {
+		c := state.Captures[i]
+		m.captures[c.ID] = &c
+	}
 	m.mu.Unlock()
 
 	if normalized {
@@ -370,11 +554,16 @@ func (m *Manager) SaveState() error {
 	for _, job := range m.jobs {
 		snaps = append(snaps, job.Snapshot())
 	}
+	captures := make([]api.BrowserCapture, 0, len(m.captures))
+	for _, capture := range m.captures {
+		captures = append(captures, *capture)
+	}
 	m.mu.RUnlock()
 
 	return m.store.Save(store.AgentState{
 		Version:   1,
 		Downloads: snaps,
+		Captures:  captures,
 		UpdatedAt: time.Now().UTC(),
 	})
 }
@@ -809,4 +998,13 @@ func resolveJobOutputPath(outputPath string, outputDir string) string {
 	}
 
 	return filepath.Clean(filepath.Join(outputDir, outputPath))
+}
+
+func makeNonConflictingName(name string) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	if base == "" {
+		base = "download"
+	}
+	return base + "-" + time.Now().UTC().Format("20060102-150405") + ext
 }

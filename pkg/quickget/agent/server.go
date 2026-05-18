@@ -104,6 +104,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleDownloadsCollection(w, r)
 		return
 	}
+	if r.URL.Path == "/captures" {
+		s.handleCapturesCollection(w, r)
+		return
+	}
 
 	if r.URL.Path == "/profiler" {
 		s.handleProfiler(w, r)
@@ -131,6 +135,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(r.URL.Path, "/downloads/") {
 		s.handleDownloadsItem(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/captures/") {
+		s.handleCapturesItem(w, r)
 		return
 	}
 
@@ -227,6 +235,94 @@ func (s *Server) handleProfilerCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, s.manager.GetProfilerState())
+}
+
+func (s *Server) handleCapturesCollection(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.manager.ListCaptures())
+	case http.MethodPost:
+		req, ok := decodeJSONBody[api.BrowserCaptureRequest](w, r)
+		if !ok {
+			return
+		}
+		capture, err := s.manager.CreateCapture(req)
+		if err != nil {
+			writeManagerError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, capture)
+	default:
+		writeMethodNotAllowed(w, http.MethodGet, http.MethodPost)
+	}
+}
+
+func (s *Server) handleCapturesItem(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/captures/")
+	if rest == "" {
+		writeError(w, http.StatusNotFound, "not_found", "route not found")
+		return
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeError(w, http.StatusNotFound, "not_found", "route not found")
+		return
+	}
+	id := parts[0]
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		capture, ok := s.manager.GetCapture(id)
+		if !ok {
+			writeError(w, http.StatusNotFound, "not_found", "capture not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, capture)
+		return
+	}
+	if len(parts) != 2 {
+		writeError(w, http.StatusNotFound, "not_found", "route not found")
+		return
+	}
+	switch parts[1] {
+	case "reject":
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		capture, err := s.manager.RejectCapture(id)
+		if err != nil {
+			writeManagerError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, capture)
+	case "start":
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		body := api.StartCaptureDownloadRequest{}
+		if r.Body != nil && r.ContentLength != 0 {
+			parsed, ok := decodeJSONBody[api.StartCaptureDownloadRequest](w, r)
+			if !ok {
+				return
+			}
+			body = parsed
+		}
+		capture, download, err := s.manager.StartCaptureDownload(id, body)
+		if err != nil {
+			writeManagerError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"capture":  capture,
+			"download": download,
+		})
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "route not found")
+	}
 }
 
 func (s *Server) handleDownloadsItem(w http.ResponseWriter, r *http.Request) {
@@ -438,6 +534,10 @@ func (s *Server) handleDebugLiveDownload(w http.ResponseWriter, r *http.Request)
 func writeManagerError(w http.ResponseWriter, err error) {
 	msg := err.Error()
 	if strings.Contains(msg, "job not found") {
+		writeError(w, http.StatusNotFound, "not_found", msg)
+		return
+	}
+	if strings.Contains(msg, "capture not found") {
 		writeError(w, http.StatusNotFound, "not_found", msg)
 		return
 	}

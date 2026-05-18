@@ -135,6 +135,78 @@ func TestServerIntegrationHTTPAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("capture endpoints require auth and lifecycle works", func(t *testing.T) {
+		noAuthResp, err := client.Get(srv.URL + "/captures")
+		if err != nil {
+			t.Fatalf("GET /captures: %v", err)
+		}
+		defer noAuthResp.Body.Close()
+		if noAuthResp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", noAuthResp.StatusCode)
+		}
+
+		capturePayload := []byte(`{"source":"chrome-auto-capture","browser":"chrome","url":"https://unit.test/capture.bin","capture_mode":"ask"}`)
+		createResp, err := client.Do(authReq(t, http.MethodPost, srv.URL+"/captures", bytes.NewReader(capturePayload)))
+		if err != nil {
+			t.Fatalf("POST /captures: %v", err)
+		}
+		defer createResp.Body.Close()
+		if createResp.StatusCode != http.StatusCreated {
+			t.Fatalf("POST /captures status=%d", createResp.StatusCode)
+		}
+		createdCapture := decodeBody[api.BrowserCapture](t, createResp.Body)
+		if createdCapture.Status != CaptureStatusPending {
+			t.Fatalf("expected pending capture, got %s", createdCapture.Status)
+		}
+
+		getCapture, err := client.Do(authReq(t, http.MethodGet, srv.URL+"/captures/"+createdCapture.ID, nil))
+		if err != nil {
+			t.Fatalf("GET /captures/{id}: %v", err)
+		}
+		defer getCapture.Body.Close()
+		if getCapture.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d", getCapture.StatusCode)
+		}
+
+		startPayload := []byte(`{"output_path":"capture.bin","directory":".","duplicate_action":"overwrite"}`)
+		startResp, err := client.Do(authReq(t, http.MethodPost, srv.URL+"/captures/"+createdCapture.ID+"/start", bytes.NewReader(startPayload)))
+		if err != nil {
+			t.Fatalf("POST /captures/{id}/start: %v", err)
+		}
+		defer startResp.Body.Close()
+		if startResp.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d", startResp.StatusCode)
+		}
+		var started map[string]any
+		if err := json.NewDecoder(startResp.Body).Decode(&started); err != nil {
+			t.Fatalf("decode start response: %v", err)
+		}
+		if _, ok := started["download"]; !ok {
+			t.Fatalf("expected download payload, got %+v", started)
+		}
+
+		rejectPayload := []byte(`{"source":"chrome-auto-capture","browser":"chrome","url":"https://unit.test/reject.bin","capture_mode":"ask"}`)
+		rejectCreateResp, err := client.Do(authReq(t, http.MethodPost, srv.URL+"/captures", bytes.NewReader(rejectPayload)))
+		if err != nil {
+			t.Fatalf("create reject capture: %v", err)
+		}
+		defer rejectCreateResp.Body.Close()
+		rejectCapture := decodeBody[api.BrowserCapture](t, rejectCreateResp.Body)
+
+		rejectResp, err := client.Do(authReq(t, http.MethodPost, srv.URL+"/captures/"+rejectCapture.ID+"/reject", nil))
+		if err != nil {
+			t.Fatalf("POST /captures/{id}/reject: %v", err)
+		}
+		defer rejectResp.Body.Close()
+		if rejectResp.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d", rejectResp.StatusCode)
+		}
+		rejected := decodeBody[api.BrowserCapture](t, rejectResp.Body)
+		if rejected.Status != CaptureStatusRejected {
+			t.Fatalf("expected rejected, got %s", rejected.Status)
+		}
+	})
+
 	t.Run("POST /downloads with trailing JSON tokens returns 400", func(t *testing.T) {
 		payload := []byte(`{"url":"https://unit.test/file.bin"}{"extra":true}`)
 		resp, err := client.Do(authReq(t, http.MethodPost, srv.URL+"/downloads", bytes.NewReader(payload)))

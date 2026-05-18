@@ -14,6 +14,7 @@ import (
 type AgentState struct {
 	Version   int                    `json:"version"`
 	Downloads []api.DownloadSnapshot `json:"downloads"`
+	Captures  []api.BrowserCapture   `json:"captures,omitempty"`
 	UpdatedAt time.Time              `json:"updatedAt"`
 }
 

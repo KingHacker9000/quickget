@@ -62,3 +62,46 @@ type ErrorResponse struct {
 	Message    string `json:"message"`
 	Suggestion string `json:"suggestion"`
 }
+
+type BrowserCaptureRequest struct {
+	Source            string            `json:"source"`
+	Browser           string            `json:"browser"`
+	URL               string            `json:"url"`
+	FinalURL          string            `json:"final_url,omitempty"`
+	Referrer          string            `json:"referrer,omitempty"`
+	SuggestedFilename string            `json:"suggested_filename,omitempty"`
+	MIMEType          string            `json:"mime_type,omitempty"`
+	TotalBytes        int64             `json:"total_bytes,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty"`
+	Cookies           string            `json:"cookies,omitempty"`
+	TabTitle          string            `json:"tab_title,omitempty"`
+	PageURL           string            `json:"page_url,omitempty"`
+	CaptureMode       string            `json:"capture_mode"`
+	ChromeDownloadID  int               `json:"chrome_download_id,omitempty"`
+	ClientRequestID   string            `json:"client_request_id,omitempty"`
+}
+
+type DuplicateInfo struct {
+	Found              bool   `json:"found"`
+	ExistingOutputPath string `json:"existing_output_path,omitempty"`
+	ExistingDownloadID string `json:"existing_download_id,omitempty"`
+	FileExists         bool   `json:"file_exists"`
+	Size               int64  `json:"size,omitempty"`
+}
+
+type BrowserCapture struct {
+	ID            string                `json:"id"`
+	Status        string                `json:"status"`
+	Request       BrowserCaptureRequest `json:"request"`
+	CreatedAt     time.Time             `json:"created_at"`
+	UpdatedAt     time.Time             `json:"updated_at"`
+	Message       string                `json:"message,omitempty"`
+	DuplicateInfo *DuplicateInfo        `json:"duplicate_info,omitempty"`
+}
+
+type StartCaptureDownloadRequest struct {
+	OutputPath      string                 `json:"output_path,omitempty"`
+	Directory       string                 `json:"directory,omitempty"`
+	DuplicateAction string                 `json:"duplicate_action"`
+	Options         *CreateDownloadRequest `json:"options,omitempty"`
+}
