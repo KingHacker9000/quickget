@@ -68,3 +68,29 @@ func TestRejectCapture(t *testing.T) {
 		t.Fatalf("expected rejected, got %s", out.Status)
 	}
 }
+
+func TestCreateCaptureAutoStartsDownload(t *testing.T) {
+	dl := newFakeDownloader()
+	dl.block = true
+	m := newManagerWithFake(t, dl, &fakeStore{})
+	sub, unsub := m.Events().Subscribe()
+	defer unsub()
+
+	capture, err := m.CreateCapture(api.BrowserCaptureRequest{
+		Source:            "chrome-auto-capture",
+		Browser:           "chrome",
+		URL:               "https://unit.test/auto.bin",
+		SuggestedFilename: "auto.bin",
+		CaptureMode:       "auto",
+	})
+	if err != nil {
+		t.Fatalf("CreateCapture error: %v", err)
+	}
+	if capture.Status != CaptureStatusStarted {
+		t.Fatalf("expected started, got %s", capture.Status)
+	}
+
+	dl.waitStarted(t)
+	_ = waitEvent(t, sub, events.EventCaptureRequested)
+	_ = waitEvent(t, sub, events.EventCaptureStarted)
+}

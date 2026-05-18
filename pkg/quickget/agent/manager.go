@@ -108,6 +108,16 @@ func (m *Manager) CreateCapture(req api.BrowserCaptureRequest) (api.BrowserCaptu
 	}
 	_ = m.SaveState()
 
+	if capture.Request.CaptureMode == "auto" {
+		captureSnap, _, err := m.StartCaptureDownload(capture.ID, api.StartCaptureDownloadRequest{
+			DuplicateAction: "new_name",
+		})
+		if err != nil {
+			return api.BrowserCapture{}, err
+		}
+		return captureSnap, nil
+	}
+
 	return capture, nil
 }
 
