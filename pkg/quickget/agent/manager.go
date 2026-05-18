@@ -389,13 +389,26 @@ func enrichCaptureMetadata(req api.BrowserCaptureRequest) api.BrowserCaptureRequ
 	if strings.TrimSpace(req.FinalURL) == "" {
 		req.FinalURL = strings.TrimSpace(info.FinalURL)
 	}
-	if strings.TrimSpace(req.SuggestedFilename) == "" && strings.TrimSpace(info.SuggestedOutputName) != "" {
-		req.SuggestedFilename = strings.TrimSpace(info.SuggestedOutputName)
+	if suggested := strings.TrimSpace(info.SuggestedOutputName); suggested != "" {
+		current := strings.TrimSpace(req.SuggestedFilename)
+		if current == "" || isLikelyGenericCaptureName(current) {
+			req.SuggestedFilename = suggested
+		}
 	}
 	if req.TotalBytes <= 0 && info.Size > 0 {
 		req.TotalBytes = info.Size
 	}
 	return req
+}
+
+func isLikelyGenericCaptureName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch n {
+	case "", "download", "download.bin", "unknown", "file", "unnamed":
+		return true
+	default:
+		return false
+	}
 }
 
 func captureHeadersToHTTP(source map[string]string, cookies string) http.Header {
