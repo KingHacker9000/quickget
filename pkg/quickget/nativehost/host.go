@@ -22,6 +22,8 @@ import (
 
 const defaultAgentURL = "http://127.0.0.1:19329"
 
+var loadOrCreateToken = agent.LoadOrCreateToken
+
 type rawRequest struct {
 	Type string `json:"type"`
 }
@@ -37,17 +39,28 @@ type envelopeCaptureRequest struct {
 }
 
 type browserCaptureExtensionPayload struct {
-	URL              string `json:"url"`
-	FinalURL         string `json:"finalUrl"`
-	Referrer         string `json:"referrer"`
-	FileName         string `json:"fileName"`
-	MIMEType         string `json:"mimeType"`
-	TotalBytes       int64  `json:"totalBytes"`
-	PageURL          string `json:"pageUrl"`
-	TabTitle         string `json:"tabTitle"`
-	ChromeDownloadID int    `json:"chromeDownloadId"`
-	Cookies          string `json:"cookies"`
-	CaptureMode      string `json:"captureMode"`
+	URL                   string `json:"url"`
+	FinalURL              string `json:"finalUrl"`
+	FinalURLSnake         string `json:"final_url"`
+	Referrer              string `json:"referrer"`
+	FileName              string `json:"fileName"`
+	FileNameSnake         string `json:"file_name"`
+	SuggestedFilename     string `json:"suggested_filename"`
+	MIMEType              string `json:"mimeType"`
+	MIMETypeSnake         string `json:"mime_type"`
+	TotalBytes            int64  `json:"totalBytes"`
+	TotalBytesSnake       int64  `json:"total_bytes"`
+	PageURL               string `json:"pageUrl"`
+	PageURLSnake          string `json:"page_url"`
+	TabTitle              string `json:"tabTitle"`
+	TabTitleSnake         string `json:"tab_title"`
+	ChromeDownloadID      int    `json:"chromeDownloadId"`
+	ChromeDownloadIDSnake int    `json:"chrome_download_id"`
+	Cookies               string `json:"cookies"`
+	CaptureMode           string `json:"captureMode"`
+	CaptureModeSnake      string `json:"capture_mode"`
+	ClientRequestID       string `json:"clientRequestId"`
+	ClientRequestIDSnake  string `json:"client_request_id"`
 }
 
 type envelopeRawCaptureRequest struct {
@@ -163,34 +176,37 @@ func (h *Host) handleBrowserCapture(ctx context.Context, payload []byte) error {
 					req.URL = strings.TrimSpace(ext.URL)
 				}
 				if strings.TrimSpace(req.FinalURL) == "" {
-					req.FinalURL = strings.TrimSpace(ext.FinalURL)
+					req.FinalURL = strings.TrimSpace(firstNonEmpty(ext.FinalURL, ext.FinalURLSnake))
 				}
 				if strings.TrimSpace(req.Referrer) == "" {
 					req.Referrer = strings.TrimSpace(ext.Referrer)
 				}
 				if strings.TrimSpace(req.SuggestedFilename) == "" {
-					req.SuggestedFilename = strings.TrimSpace(ext.FileName)
+					req.SuggestedFilename = strings.TrimSpace(firstNonEmpty(ext.FileName, ext.FileNameSnake, ext.SuggestedFilename))
 				}
 				if strings.TrimSpace(req.MIMEType) == "" {
-					req.MIMEType = strings.TrimSpace(ext.MIMEType)
+					req.MIMEType = strings.TrimSpace(firstNonEmpty(ext.MIMEType, ext.MIMETypeSnake))
 				}
-				if req.TotalBytes == 0 && ext.TotalBytes > 0 {
-					req.TotalBytes = ext.TotalBytes
+				if req.TotalBytes == 0 {
+					req.TotalBytes = firstPositiveInt64(ext.TotalBytes, ext.TotalBytesSnake)
 				}
 				if strings.TrimSpace(req.PageURL) == "" {
-					req.PageURL = strings.TrimSpace(ext.PageURL)
+					req.PageURL = strings.TrimSpace(firstNonEmpty(ext.PageURL, ext.PageURLSnake))
 				}
 				if strings.TrimSpace(req.TabTitle) == "" {
-					req.TabTitle = strings.TrimSpace(ext.TabTitle)
+					req.TabTitle = strings.TrimSpace(firstNonEmpty(ext.TabTitle, ext.TabTitleSnake))
 				}
-				if req.ChromeDownloadID == 0 && ext.ChromeDownloadID != 0 {
-					req.ChromeDownloadID = ext.ChromeDownloadID
+				if req.ChromeDownloadID == 0 {
+					req.ChromeDownloadID = firstNonZeroInt(ext.ChromeDownloadID, ext.ChromeDownloadIDSnake)
 				}
 				if strings.TrimSpace(req.Cookies) == "" {
 					req.Cookies = ext.Cookies
 				}
 				if strings.TrimSpace(req.CaptureMode) == "" {
-					req.CaptureMode = strings.TrimSpace(ext.CaptureMode)
+					req.CaptureMode = strings.TrimSpace(firstNonEmpty(ext.CaptureMode, ext.CaptureModeSnake))
+				}
+				if strings.TrimSpace(req.ClientRequestID) == "" {
+					req.ClientRequestID = strings.TrimSpace(firstNonEmpty(ext.ClientRequestID, ext.ClientRequestIDSnake))
 				}
 			}
 		}
@@ -223,7 +239,7 @@ func (h *Host) handleBrowserCapture(ctx context.Context, payload []byte) error {
 		})
 	}
 
-	token, err := agent.LoadOrCreateToken()
+	token, err := loadOrCreateToken()
 	if err != nil {
 		return err
 	}
@@ -231,7 +247,7 @@ func (h *Host) handleBrowserCapture(ctx context.Context, payload []byte) error {
 	capture, err := client.CreateCapture(ctx, req.BrowserCaptureRequest)
 	if err != nil {
 		h.errLog.Printf("capture forward failed type=browser_capture url=%s source=%s browser=%s err=%v", req.URL, req.Source, req.Browser, err)
-		msg := fmt.Sprintf("failed to forward capture to quickget-agent: %v", err)
+		msg := formatCaptureForwardError(err)
 		return WriteMessage(h.out, map[string]any{
 			"type":              "browser_capture_result",
 			"ok":                false,
@@ -326,4 +342,43 @@ func startDetached(path string, args ...string) error {
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Start()
+}
+
+func formatCaptureForwardError(err error) string {
+	if err == nil {
+		return "failed to forward capture to quickget-agent: unknown error"
+	}
+	detail := strings.TrimSpace(err.Error())
+	if detail == "" {
+		return "failed to forward capture to quickget-agent: unknown error"
+	}
+	return fmt.Sprintf("failed to forward capture to quickget-agent: %s", detail)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func firstPositiveInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstNonZeroInt(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
