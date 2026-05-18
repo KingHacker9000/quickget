@@ -17,6 +17,7 @@ import (
 	"quickget/pkg/quickget/core"
 	"quickget/pkg/quickget/events"
 	"quickget/pkg/quickget/manifest"
+	"quickget/pkg/quickget/probe"
 	"quickget/pkg/quickget/store"
 )
 
@@ -76,9 +77,22 @@ func (m *Manager) CreateCapture(req api.BrowserCaptureRequest) (api.BrowserCaptu
 	req.Source = strings.TrimSpace(req.Source)
 	req.Browser = strings.TrimSpace(req.Browser)
 	req.CaptureMode = strings.ToLower(strings.TrimSpace(req.CaptureMode))
+	req.FinalURL = strings.TrimSpace(req.FinalURL)
+	req.SuggestedFilename = strings.TrimSpace(req.SuggestedFilename)
+	req.MIMEType = strings.TrimSpace(req.MIMEType)
+	req.Referrer = strings.TrimSpace(req.Referrer)
+	req.PageURL = strings.TrimSpace(req.PageURL)
+	req.TabTitle = strings.TrimSpace(req.TabTitle)
+	req.Cookies = strings.TrimSpace(req.Cookies)
+	if len(req.Headers) > 0 {
+		for k, v := range req.Headers {
+			req.Headers[k] = strings.TrimSpace(v)
+		}
+	}
 	if err := validateCaptureRequest(req); err != nil {
 		return api.BrowserCapture{}, err
 	}
+	req = enrichCaptureMetadata(req)
 
 	m.mu.Lock()
 	id := NewJobID()
@@ -188,6 +202,10 @@ func (m *Manager) StartCaptureDownload(id string, req api.StartCaptureDownloadRe
 		URL:        captureReq.URL,
 		OutputPath: strings.TrimSpace(req.OutputPath),
 		Directory:  strings.TrimSpace(req.Directory),
+		Headers:    cloneCaptureHeaders(captureReq.Headers, captureReq.Cookies),
+	}
+	if strings.TrimSpace(captureReq.FinalURL) != "" {
+		downloadReq.URL = strings.TrimSpace(captureReq.FinalURL)
 	}
 	if downloadReq.OutputPath == "" && strings.TrimSpace(captureReq.SuggestedFilename) != "" {
 		downloadReq.OutputPath = strings.TrimSpace(captureReq.SuggestedFilename)
@@ -352,6 +370,85 @@ func (m *Manager) Start(id string) error {
 
 	go m.runDownload(ctx, id)
 	return nil
+}
+
+func enrichCaptureMetadata(req api.BrowserCaptureRequest) api.BrowserCaptureRequest {
+	rawURL := strings.TrimSpace(req.URL)
+	if rawURL == "" {
+		return req
+	}
+	client := core.NewHTTPClient(1, core.DefaultForceHTTP1, core.DefaultMaxIdleConns, core.DefaultIdleTimeoutSec)
+	headers := captureHeadersToHTTP(req.Headers, req.Cookies)
+	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	info, err := probe.FetchURLInfo(ctx, client, rawURL, headers, userAgent, core.ApplyHeaders)
+	if err != nil {
+		return req
+	}
+	if strings.TrimSpace(req.FinalURL) == "" {
+		req.FinalURL = strings.TrimSpace(info.FinalURL)
+	}
+	if strings.TrimSpace(req.SuggestedFilename) == "" && strings.TrimSpace(info.SuggestedOutputName) != "" {
+		req.SuggestedFilename = strings.TrimSpace(info.SuggestedOutputName)
+	}
+	if req.TotalBytes <= 0 && info.Size > 0 {
+		req.TotalBytes = info.Size
+	}
+	return req
+}
+
+func captureHeadersToHTTP(source map[string]string, cookies string) http.Header {
+	headers := make(http.Header)
+	for k, v := range source {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		value := strings.TrimSpace(v)
+		if value == "" {
+			continue
+		}
+		headers.Set(key, value)
+	}
+	if c := strings.TrimSpace(cookies); c != "" && headers.Get("Cookie") == "" {
+		headers.Set("Cookie", c)
+	}
+	return headers
+}
+
+func cloneCaptureHeaders(source map[string]string, cookies string) map[string]string {
+	if len(source) == 0 && strings.TrimSpace(cookies) == "" {
+		return nil
+	}
+	cloned := make(map[string]string, len(source)+1)
+	for k, v := range source {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		value := strings.TrimSpace(v)
+		if value == "" {
+			continue
+		}
+		cloned[key] = value
+	}
+	if c := strings.TrimSpace(cookies); c != "" {
+		hasCookie := false
+		for k := range cloned {
+			if strings.EqualFold(k, "Cookie") {
+				hasCookie = true
+				break
+			}
+		}
+		if !hasCookie {
+			cloned["Cookie"] = c
+		}
+	}
+	if len(cloned) == 0 {
+		return nil
+	}
+	return cloned
 }
 
 func (m *Manager) Pause(id string) error {
