@@ -20,7 +20,7 @@ type InstallResult struct {
 	RegistryConfigured bool
 }
 
-func InstallChrome(hostExecutablePath string) (InstallResult, error) {
+func InstallChrome(hostExecutablePath string, allowedOrigins []string) (InstallResult, error) {
 	if runtime.GOOS != "windows" {
 		return InstallResult{}, errors.New("install-chrome is currently supported on Windows only")
 	}
@@ -29,6 +29,10 @@ func InstallChrome(hostExecutablePath string) (InstallResult, error) {
 		return InstallResult{}, errors.New("host executable path is required")
 	}
 	exe, err := filepath.Abs(exe)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	origins, err := normalizeAllowedOrigins(allowedOrigins)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -47,7 +51,7 @@ func InstallChrome(hostExecutablePath string) (InstallResult, error) {
 		"description":     "QuickGet native messaging host",
 		"path":            exe,
 		"type":            "stdio",
-		"allowed_origins": []string{},
+		"allowed_origins": origins,
 	}
 	b, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -84,4 +88,27 @@ func UninstallChrome() error {
 
 func InstallHelp(exePath string) string {
 	return fmt.Sprintf("If registry registration failed, create key HKCU\\\\Software\\\\Google\\\\Chrome\\\\NativeMessagingHosts\\\\%s with default value set to manifest path. Executable: %s", ChromeHostName, exePath)
+}
+
+func normalizeAllowedOrigins(origins []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(origins))
+	out := make([]string, 0, len(origins))
+	for _, raw := range origins {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		if !strings.HasPrefix(v, "chrome-extension://") || !strings.HasSuffix(v, "/") {
+			return nil, fmt.Errorf("invalid allowed origin %q; expected format chrome-extension://<extension-id>/", v)
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("at least one extension origin is required; pass -origin chrome-extension://<extension-id>/")
+	}
+	return out, nil
 }

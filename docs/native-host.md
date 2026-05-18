@@ -39,14 +39,16 @@ go build ./cmd/quickget-native-host
 Install Chrome host registration:
 
 ```powershell
-.\quickget-native-host.exe install-chrome
+.\quickget-native-host.exe install-chrome -origin "chrome-extension://<extension-id>/"
 ```
 
 Optional explicit binary path:
 
 ```powershell
-.\quickget-native-host.exe install-chrome -path "C:\Path\To\quickget-native-host.exe"
+.\quickget-native-host.exe install-chrome -path "C:\Path\To\quickget-native-host.exe" -origin "chrome-extension://<extension-id>/"
 ```
+
+Find `<extension-id>` from `chrome://extensions` (Developer mode enabled).
 
 Uninstall:
 

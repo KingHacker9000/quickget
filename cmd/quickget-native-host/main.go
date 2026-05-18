@@ -12,6 +12,20 @@ import (
 	"quickget/pkg/quickget/nativehost"
 )
 
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	if s == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", []string(*s))
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -44,6 +58,8 @@ func runInstallChrome(args []string) error {
 	fs := flag.NewFlagSet("install-chrome", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	hostPath := fs.String("path", "", "path to quickget-native-host executable")
+	var allowedOrigins stringSliceFlag
+	fs.Var(&allowedOrigins, "origin", "allowed extension origin (repeatable), e.g. chrome-extension://<extension-id>/")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -59,7 +75,7 @@ func runInstallChrome(args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := nativehost.InstallChrome(path)
+	result, err := nativehost.InstallChrome(path, allowedOrigins)
 	if err != nil {
 		return err
 	}
