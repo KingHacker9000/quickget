@@ -31,6 +31,11 @@ type browserCaptureRequest struct {
 	api.BrowserCaptureRequest
 }
 
+type envelopeCaptureRequest struct {
+	Type    string                    `json:"type"`
+	Payload api.BrowserCaptureRequest `json:"payload"`
+}
+
 type hostConfig struct {
 	QDMExecutablePath   string `json:"qdm_executable_path"`
 	AgentExecutablePath string `json:"agent_executable_path"`
@@ -124,12 +129,27 @@ func (h *Host) handleBrowserCapture(ctx context.Context, payload []byte) error {
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return fmt.Errorf("decode browser_capture payload: %w", err)
 	}
+	if strings.TrimSpace(req.URL) == "" {
+		var wrapped envelopeCaptureRequest
+		if err := json.Unmarshal(payload, &wrapped); err == nil {
+			req.BrowserCaptureRequest = wrapped.Payload
+		}
+	}
+	if strings.TrimSpace(req.URL) == "" {
+		return WriteMessage(h.out, map[string]any{
+			"type":    "browser_capture_result",
+			"ok":      false,
+			"error":   "invalid_capture_request",
+			"message": "capture request URL is required",
+		})
+	}
 
 	if err := h.ensureAgentRunning(ctx); err != nil {
 		return WriteMessage(h.out, map[string]any{
 			"type":              "browser_capture_result",
 			"ok":                false,
 			"client_request_id": req.ClientRequestID,
+			"error":             err.Error(),
 			"message":           err.Error(),
 		})
 	}
@@ -146,6 +166,7 @@ func (h *Host) handleBrowserCapture(ctx context.Context, payload []byte) error {
 			"type":              "browser_capture_result",
 			"ok":                false,
 			"client_request_id": req.ClientRequestID,
+			"error":             "failed to forward capture to quickget-agent",
 			"message":           "failed to forward capture to quickget-agent",
 		})
 	}
