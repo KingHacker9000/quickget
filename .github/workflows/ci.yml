@@ -40,5 +40,8 @@ jobs:
       - name: Build quickget-agent
         run: go build ./cmd/quickget-agent
 
+      - name: Build quickget-native-host
+        run: go build ./cmd/quickget-native-host
+
       - name: Run tests
         run: go test ./...

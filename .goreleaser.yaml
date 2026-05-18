@@ -4,12 +4,12 @@ project_name: quickget
 
 builds:
   - id: quickget
-    binary: quickget
     main: ./cmd/quickget
+    binary: quickget
     goos:
       - windows
-      - linux
       - darwin
+      - linux
     goarch:
       - amd64
       - arm64
@@ -18,12 +18,28 @@ builds:
         goarch: arm64
 
   - id: quickget-agent
-    binary: quickget-agent
     main: ./cmd/quickget-agent
+    binary: quickget-agent
     goos:
       - windows
-      - linux
       - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.buildCommit={{ .Commit }} -X main.buildDate={{ .Date }}
+
+  - id: quickget-native-host
+    main: ./cmd/quickget-native-host
+    binary: quickget-native-host
+    goos:
+      - windows
+      - darwin
+      - linux
     goarch:
       - amd64
       - arm64
@@ -32,16 +48,35 @@ builds:
         goarch: arm64
 
 archives:
-  - id: default
-    builds:
+  - id: quickget
+    ids:
       - quickget
+    formats: [tar.gz]
+    name_template: "quickget_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+  - id: quickget-agent
+    ids:
       - quickget-agent
+    formats: [tar.gz]
+    name_template: "quickget-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+  - id: quickget-native-host
+    ids:
+      - quickget-native-host
+    formats: [tar.gz]
+    name_template: "quickget-native-host_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
       - LICENSE
 
 checksum:
-  name_template: checksums.txt
+  name_template: "checksums.txt"
 
 changelog:
-  use: git
+  sort: asc
