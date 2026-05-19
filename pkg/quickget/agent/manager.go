@@ -412,29 +412,27 @@ func isLikelyGenericCaptureName(name string) bool {
 }
 
 func captureHeadersToHTTP(source map[string]string, cookies string) http.Header {
+	normalized := applyCaptureCookie(normalizeCaptureHeaders(source), cookies)
 	headers := make(http.Header)
-	for k, v := range source {
-		key := strings.TrimSpace(k)
-		if key == "" {
-			continue
-		}
-		value := strings.TrimSpace(v)
-		if value == "" {
-			continue
-		}
-		headers.Set(key, value)
-	}
-	if c := strings.TrimSpace(cookies); c != "" && headers.Get("Cookie") == "" {
-		headers.Set("Cookie", c)
+	for k, v := range normalized {
+		headers.Set(k, v)
 	}
 	return headers
 }
 
 func cloneCaptureHeaders(source map[string]string, cookies string) map[string]string {
-	if len(source) == 0 && strings.TrimSpace(cookies) == "" {
+	cloned := applyCaptureCookie(normalizeCaptureHeaders(source), cookies)
+	if len(cloned) == 0 {
 		return nil
 	}
-	cloned := make(map[string]string, len(source)+1)
+	return cloned
+}
+
+func normalizeCaptureHeaders(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	normalized := make(map[string]string, len(source))
 	for k, v := range source {
 		key := strings.TrimSpace(k)
 		if key == "" {
@@ -444,24 +442,29 @@ func cloneCaptureHeaders(source map[string]string, cookies string) map[string]st
 		if value == "" {
 			continue
 		}
-		cloned[key] = value
+		normalized[key] = value
 	}
-	if c := strings.TrimSpace(cookies); c != "" {
-		hasCookie := false
-		for k := range cloned {
-			if strings.EqualFold(k, "Cookie") {
-				hasCookie = true
-				break
-			}
-		}
-		if !hasCookie {
-			cloned["Cookie"] = c
-		}
-	}
-	if len(cloned) == 0 {
+	if len(normalized) == 0 {
 		return nil
 	}
-	return cloned
+	return normalized
+}
+
+func applyCaptureCookie(headers map[string]string, cookies string) map[string]string {
+	cookie := strings.TrimSpace(cookies)
+	if cookie == "" {
+		return headers
+	}
+	for k := range headers {
+		if strings.EqualFold(k, "Cookie") {
+			return headers
+		}
+	}
+	if headers == nil {
+		headers = make(map[string]string, 1)
+	}
+	headers["Cookie"] = cookie
+	return headers
 }
 
 func (m *Manager) Pause(id string) error {
@@ -640,9 +643,10 @@ func (m *Manager) LoadState() error {
 				outDir = ""
 			}
 			job.Options = toCoreRequest(api.CreateDownloadRequest{
-				URL:        snap.URL,
-				OutputPath: outBase,
-				Directory:  outDir,
+				URL:         snap.URL,
+				OutputPath:  outBase,
+				Directory:   outDir,
+				Connections: snap.Connections,
 			})
 		}
 		m.jobs[job.ID] = job

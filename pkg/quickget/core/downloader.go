@@ -414,8 +414,8 @@ func downloadSegment(ctx context.Context, client *http.Client, rawURL string, ou
 			if writeErr != nil {
 				return writeErr
 			}
-			if written <= 0 {
-				return errors.New("invalid write length")
+			if written != n {
+				return io.ErrShortWrite
 			}
 			offset += int64(written)
 			atomic.AddInt64(downloaded, int64(written))
@@ -493,6 +493,9 @@ func downloadSingle(ctx context.Context, client *http.Client, rawURL string, out
 			if writeErr != nil {
 				return writeErr
 			}
+			if written != n {
+				return io.ErrShortWrite
+			}
 			atomic.AddInt64(&downloaded, int64(written))
 			atomic.AddInt64(&mutations, 1)
 		}
@@ -550,6 +553,9 @@ func downloadSingleRange(ctx context.Context, client *http.Client, rawURL string
 			written, writeErr := outFile.Write(buf[:n])
 			if writeErr != nil {
 				return writeErr
+			}
+			if written != n {
+				return io.ErrShortWrite
 			}
 			atomic.AddInt64(&downloaded, int64(written))
 			atomic.AddInt64(&mutations, 1)
