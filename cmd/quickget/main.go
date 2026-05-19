@@ -21,10 +21,5 @@ func main() {
 }
 
 func hasJSONEventsFlag(args []string) bool {
-	for _, arg := range args {
-		if arg == "-json-events" || arg == "--json-events" || arg == "-json-events=true" || arg == "--json-events=true" {
-			return true
-		}
-	}
-	return false
+	return cli.HasJSONEventsArg(args)
 }

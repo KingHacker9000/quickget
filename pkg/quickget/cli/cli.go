@@ -177,6 +177,10 @@ func hasJSONEventsArg(args []string) bool {
 	return false
 }
 
+func HasJSONEventsArg(args []string) bool {
+	return hasJSONEventsArg(args)
+}
+
 func parseDownloadOptions(args []string, stderr io.Writer, binName string) (core.Request, error) {
 	opts := core.DefaultRequest()
 

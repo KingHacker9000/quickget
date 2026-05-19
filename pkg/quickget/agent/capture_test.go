@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"quickget/pkg/quickget/api"
@@ -93,4 +95,37 @@ func TestCreateCaptureAutoStartsDownload(t *testing.T) {
 	dl.waitStarted(t)
 	_ = waitEvent(t, sub, events.EventCaptureRequested)
 	_ = waitEvent(t, sub, events.EventCaptureStarted)
+}
+
+func TestCreateCaptureEnrichesMetadataFromProbe(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="report.csv"`)
+		w.Header().Set("Content-Length", "12345")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	m := NewManager(&fakeStore{})
+	capture, err := m.CreateCapture(api.BrowserCaptureRequest{
+		Source:      "chrome-auto-capture",
+		Browser:     "chrome",
+		URL:         srv.URL + "/download?id=42",
+		CaptureMode: "ask",
+	})
+	if err != nil {
+		t.Fatalf("CreateCapture error: %v", err)
+	}
+	if capture.Request.SuggestedFilename != "report.csv" {
+		t.Fatalf("expected suggested filename from probe, got %q", capture.Request.SuggestedFilename)
+	}
+	if capture.Request.TotalBytes != 12345 {
+		t.Fatalf("expected total bytes from probe, got %d", capture.Request.TotalBytes)
+	}
+	if capture.Request.FinalURL == "" {
+		t.Fatal("expected final URL to be populated from probe")
+	}
 }

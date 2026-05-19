@@ -6,9 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -16,6 +14,7 @@ import (
 	"quickget/pkg/quickget/agentclient"
 	"quickget/pkg/quickget/api"
 	"quickget/pkg/quickget/core"
+	"quickget/pkg/quickget/filename"
 )
 
 const defaultAgentURL = "http://127.0.0.1:19329"
@@ -297,54 +296,9 @@ func parseAgentDownloadArgs(args []string, stderr io.Writer, binName string) (*a
 		return nil, api.CreateDownloadRequest{}, errors.New("url cannot be empty")
 	}
 	if req.OutputPath == "" {
-		req.OutputPath = deriveSafeOutputFilenameFromURL(req.URL)
+		req.OutputPath = filename.DeriveSafeOutputFilenameFromURL(req.URL)
 	}
 	return client, req, nil
-}
-
-func deriveSafeOutputFilenameFromURL(rawURL string) string {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return "download.bin"
-	}
-	base := strings.TrimSpace(path.Base(parsed.Path))
-	if decoded, decodeErr := url.PathUnescape(base); decodeErr == nil {
-		base = decoded
-	}
-	base = sanitizeFilename(base)
-	if base == "" || base == "." || base == "/" {
-		return "download.bin"
-	}
-	return base
-}
-
-func sanitizeFilename(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return ""
-	}
-	var b strings.Builder
-	b.Grow(len(name))
-	for _, r := range name {
-		switch {
-		case r < 32:
-			continue
-		case r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|':
-			b.WriteByte('_')
-		default:
-			b.WriteRune(r)
-		}
-	}
-	out := strings.TrimSpace(strings.Trim(b.String(), ". "))
-	if out == "" {
-		return ""
-	}
-	upper := strings.ToUpper(out)
-	switch upper {
-	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
-		return "_" + out
-	}
-	return out
 }
 
 func newAgentClient(args []string, stderr io.Writer, binName string, subcmd string, requireToken bool) (*agentclient.Client, []string, error) {

@@ -32,6 +32,7 @@ func InstallChrome(hostExecutablePath string, allowedOrigins []string) (InstallR
 	if err != nil {
 		return InstallResult{}, err
 	}
+	exe = normalizeWindowsExecutablePath(exe)
 	origins, err := normalizeAllowedOrigins(allowedOrigins)
 	if err != nil {
 		return InstallResult{}, err
@@ -111,4 +112,18 @@ func normalizeAllowedOrigins(origins []string) ([]string, error) {
 		return nil, errors.New("at least one extension origin is required; pass -origin chrome-extension://<extension-id>/")
 	}
 	return out, nil
+}
+
+func normalizeWindowsExecutablePath(path string) string {
+	const (
+		devicePrefix = `\\?\`
+		uncPrefix    = `\\?\UNC\`
+	)
+	if strings.HasPrefix(path, uncPrefix) {
+		return `\\` + strings.TrimPrefix(path, uncPrefix)
+	}
+	if strings.HasPrefix(path, devicePrefix) {
+		return strings.TrimPrefix(path, devicePrefix)
+	}
+	return path
 }

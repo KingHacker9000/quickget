@@ -557,3 +557,41 @@ func TestManagerLoadStateRecoversSnapshotsAndPublishesReady(t *testing.T) {
 		t.Fatalf("expected ready event status, got %q", ev.Status)
 	}
 }
+
+func TestManagerLoadStateResumePreservesConnectionCount(t *testing.T) {
+	now := time.Now().UTC()
+	st := &fakeStore{
+		load: store.AgentState{
+			Version: 1,
+			Downloads: []api.DownloadSnapshot{
+				{
+					ID:          "resume-1",
+					URL:         "https://unit.test/file.bin",
+					OutputPath:  "resume.bin",
+					Status:      JobStatusPaused,
+					Connections: 5,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+				},
+			},
+			UpdatedAt: now,
+		},
+	}
+	dl := newFakeDownloader()
+	m := newManagerWithFake(t, dl, st)
+
+	if err := m.LoadState(); err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if err := m.Resume("resume-1"); err != nil {
+		t.Fatalf("Resume error: %v", err)
+	}
+
+	dl.waitStarted(t)
+	dl.allowReturn()
+	waitForStatus(t, m, "resume-1", JobStatusCompleted)
+
+	if got := dl.options().Connections; got != 5 {
+		t.Fatalf("expected resumed connection count 5, got %d", got)
+	}
+}
