@@ -341,6 +341,54 @@ func (m *Manager) CreateDownload(req api.CreateDownloadRequest) (api.DownloadSna
 	return snap, nil
 }
 
+func (m *Manager) ProbeDownload(req api.ProbeDownloadRequest) (api.ProbeDownloadResponse, error) {
+	rawURL := strings.TrimSpace(req.URL)
+	if rawURL == "" {
+		return api.ProbeDownloadResponse{}, errors.New("url is required")
+	}
+	validatedURL, err := probe.ValidateURL(rawURL)
+	if err != nil {
+		return api.ProbeDownloadResponse{}, err
+	}
+	client := core.NewHTTPClient(1, core.DefaultForceHTTP1, core.DefaultMaxIdleConns, core.DefaultIdleTimeoutSec)
+	headers := make(http.Header)
+	for k, v := range req.Headers {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		value := strings.TrimSpace(v)
+		if value == "" {
+			continue
+		}
+		headers.Set(key, value)
+	}
+	userAgent := strings.TrimSpace(req.UserAgent)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	info, err := probe.FetchURLInfo(ctx, client, validatedURL, headers, userAgent, core.ApplyHeaders)
+	if err != nil {
+		return api.ProbeDownloadResponse{}, err
+	}
+	suggested := strings.TrimSpace(info.SuggestedOutputName)
+	if suggested == "" {
+		suggested = deriveSafeOutputFilenameFromURL(info.FinalURL)
+	}
+	response := api.ProbeDownloadResponse{
+		URL:                validatedURL,
+		FinalURL:           strings.TrimSpace(info.FinalURL),
+		SuggestedFilename:  suggested,
+		RangeSupported:     info.RangeSupported,
+		Status:             strings.TrimSpace(info.Status),
+		StatusCode:         info.StatusCode,
+		ContentDisposition: strings.TrimSpace(info.ContentDisposition),
+	}
+	if info.Size > 0 {
+		response.TotalBytes = info.Size
+	}
+	return response, nil
+}
+
 func (m *Manager) Start(id string) error {
 	m.mu.Lock()
 	job, ok := m.jobs[id]

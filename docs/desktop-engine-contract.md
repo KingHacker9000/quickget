@@ -42,16 +42,84 @@ The desktop app is a client of the local agent API (`http://127.0.0.1:19329` by 
 
 Desktop app uses the local agent API as follows:
 
-- Create a download: `POST /downloads`
-- Receive live state/progress: `GET /events` (SSE stream)
-- Control jobs:
+- Health and readiness:
+  - `GET /health` (no auth)
+- Downloads:
+  - `GET /downloads`
+  - `POST /downloads`
+  - `GET /downloads/{id}`
   - `POST /downloads/{id}/pause`
   - `POST /downloads/{id}/resume`
   - `POST /downloads/{id}/cancel`
+  - `POST /downloads/{id}/delete` (optional `{"delete_files": true}`)
+- Browser captures:
+  - `GET /captures`
+  - `POST /captures`
+  - `GET /captures/{id}`
+  - `POST /captures/{id}/reject`
+  - `POST /captures/{id}/start`
+- Profiler:
+  - `GET /profiler`
+  - `POST /profiler/run`
+  - `POST /profiler/cancel`
+- Event stream:
+  - `GET /events` (SSE stream)
 
 The desktop app should treat SSE events as the source of truth for rendering real-time state transitions.
 
-## 5) Error UX contract
+## 5) Agent feature contract (authoritative behaviors)
+
+### Downloads
+
+- Queued and running job lifecycle with persisted state across agent restart.
+- Pause, resume, cancel, delete controls.
+- Progress snapshots include bytes, percent, speed, segments, and status metadata.
+- Create-download options supported by engine:
+  - URL, output path, directory
+  - connections, retries
+  - queue mode + segment size
+  - buffer size + auto buffer
+  - force HTTP/1.1
+  - custom headers + user-agent
+
+### Browser captures
+
+- Capture ingestion API for browser-originated download requests.
+- Duplicate detection metadata for capture decisions.
+- Explicit reject path.
+- Start-from-capture path with duplicate policy:
+  - `overwrite`
+  - `new_name`
+  - `show_existing` (informational; no start)
+
+### Profiler
+
+- Agent-managed benchmark/profile orchestration.
+- Run request supports:
+  - `level` (`quick|normal|exhaustive`)
+  - `sizes` (CSV subset of `10MB,100MB,1GB`)
+  - `repeats`
+  - `url`
+- Produces recommendation payload and artifact references (`raw_results.csv`, `summary.csv`, profile directory).
+
+## 6) CLI surface contract for agents/operators
+
+The CLI must remain a complete operator surface over the local agent:
+
+- `quickget agent health`
+- `quickget agent list`
+- `quickget agent get <id>`
+- `quickget agent download <url> [options]`
+- `quickget agent pause <id>`
+- `quickget agent resume <id>`
+- `quickget agent cancel <id>`
+- `quickget agent delete <id> [-delete-files]`
+- `quickget agent captures list|get|reject|start ...`
+- `quickget agent profiler status|run|cancel ...`
+
+All non-health operations require loading bearer token from user config path (`QuickGet/agent-token`) unless explicitly provided by another trusted path in future changes.
+
+## 7) Error UX contract
 
 Desktop UI must present user-friendly messages derived from agent diagnostics and suggestions.
 
@@ -64,14 +132,14 @@ Required UX examples:
 
 Error copy should prioritize clear action over raw internal error text.
 
-## 6) Security contract
+## 8) Security contract
 
 - Agent bind target is localhost/loopback only.
 - Agent API requires bearer token auth for non-health routes.
 - Desktop app must never log `Authorization` header values.
 - Desktop app must never log custom secrets (for example sensitive request headers).
 
-## 7) Future Chrome extension contract
+## 9) Future Chrome extension contract
 
 Planned integration path:
 
