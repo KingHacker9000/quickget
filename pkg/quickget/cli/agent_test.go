@@ -210,3 +210,63 @@ func TestRunAgentDeleteAcceptsAgentFlag(t *testing.T) {
 		t.Fatalf("unexpected delete output: %q", stdout.String())
 	}
 }
+
+func TestRunAgentGetAcceptsAgentFlag(t *testing.T) {
+	root := t.TempDir()
+	setUserConfigEnv(t, root)
+	writeAgentTokenFile(t, "tok")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/downloads/job-1" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.DownloadSnapshot{
+			ID:         "job-1",
+			Status:     "running",
+			URL:        "https://example.com/file.bin",
+			OutputPath: "file.bin",
+			Downloaded: 5,
+			Total:      10,
+			Percent:    50,
+			CreatedAt:  time.Now().UTC(),
+			UpdatedAt:  time.Now().UTC(),
+		})
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runAgentGet([]string{"-agent", srv.URL, "job-1"}, &stdout, &stderr, "quickget"); err != nil {
+		t.Fatalf("runAgentGet error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "ID: job-1") || !strings.Contains(stdout.String(), "Progress: 50.00%") {
+		t.Fatalf("unexpected get output: %q", stdout.String())
+	}
+}
+
+func TestRunAgentProfilerStatusAcceptsAgentFlag(t *testing.T) {
+	root := t.TempDir()
+	setUserConfigEnv(t, root)
+	writeAgentTokenFile(t, "tok")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/profiler" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "ready",
+		})
+	}))
+	defer srv.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runAgentProfiler([]string{"status", "-agent", srv.URL}, &stdout, &stderr, "quickget"); err != nil {
+		t.Fatalf("runAgentProfiler status error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Status: ready") {
+		t.Fatalf("unexpected profiler status output: %q", stdout.String())
+	}
+}

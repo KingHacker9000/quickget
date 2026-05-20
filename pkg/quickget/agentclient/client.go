@@ -127,6 +127,24 @@ func (c *Client) StartCaptureDownload(ctx context.Context, id string, req api.St
 	return out, err
 }
 
+func (c *Client) GetProfiler(ctx context.Context) (map[string]any, error) {
+	var out map[string]any
+	err := c.do(ctx, http.MethodGet, "/profiler", nil, &out)
+	return out, err
+}
+
+func (c *Client) RunProfiler(ctx context.Context, req map[string]any) (map[string]any, error) {
+	var out map[string]any
+	err := c.do(ctx, http.MethodPost, "/profiler/run", req, &out)
+	return out, err
+}
+
+func (c *Client) CancelProfiler(ctx context.Context) (map[string]any, error) {
+	var out map[string]any
+	err := c.do(ctx, http.MethodPost, "/profiler/cancel", nil, &out)
+	return out, err
+}
+
 func (c *Client) do(ctx context.Context, method string, path string, body any, out any) error {
 	var payload io.Reader
 	if body != nil {

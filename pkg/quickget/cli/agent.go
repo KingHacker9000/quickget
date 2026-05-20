@@ -33,6 +33,8 @@ func runAgentCommand(args []string, stdout io.Writer, stderr io.Writer, binName 
 		return runAgentHealth(args[1:], stdout, stderr, binName)
 	case "list":
 		return runAgentList(args[1:], stdout, stderr, binName)
+	case "get":
+		return runAgentGet(args[1:], stdout, stderr, binName)
 	case "download":
 		return runAgentDownload(args[1:], stdout, stderr, binName)
 	case "add":
@@ -45,6 +47,10 @@ func runAgentCommand(args []string, stdout io.Writer, stderr io.Writer, binName 
 		return runAgentCancel(args[1:], stdout, stderr, binName)
 	case "delete":
 		return runAgentDelete(args[1:], stdout, stderr, binName)
+	case "captures":
+		return runAgentCaptures(args[1:], stdout, stderr, binName)
+	case "profiler":
+		return runAgentProfiler(args[1:], stdout, stderr, binName)
 	default:
 		printAgentUsage(stderr, binName)
 		return fmt.Errorf("unknown agent subcommand: %s", args[0])
@@ -100,6 +106,42 @@ func runAgentList(args []string, stdout io.Writer, stderr io.Writer, binName str
 			line += " | " + s.Message
 		}
 		fmt.Fprintln(stdout, line)
+	}
+	return nil
+}
+
+func runAgentGet(args []string, stdout io.Writer, stderr io.Writer, binName string) error {
+	normalized, err := normalizeAgentArgs(args, map[string]bool{"agent": true}, 1)
+	if err != nil {
+		printAgentSubcommandUsage(stderr, binName, "get")
+		return err
+	}
+	client, rest, err := newAgentClient(normalized, stderr, binName, "get", true)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		printAgentSubcommandUsage(stderr, binName, "get")
+		return errors.New("get requires exactly one id")
+	}
+	snap, err := client.GetDownload(context.Background(), strings.TrimSpace(rest[0]))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "ID: %s\n", snap.ID)
+	fmt.Fprintf(stdout, "Status: %s\n", snap.Status)
+	fmt.Fprintf(stdout, "URL: %s\n", snap.URL)
+	fmt.Fprintf(stdout, "Output: %s\n", snap.OutputPath)
+	total := "unknown"
+	if snap.Total >= 0 {
+		total = fmt.Sprintf("%d", snap.Total)
+	}
+	fmt.Fprintf(stdout, "Progress: %.2f%% (%d/%s bytes)\n", snap.Percent, snap.Downloaded, total)
+	if snap.Error != "" {
+		fmt.Fprintf(stdout, "Error: %s\n", snap.Error)
+	}
+	if snap.Message != "" {
+		fmt.Fprintf(stdout, "Message: %s\n", snap.Message)
 	}
 	return nil
 }
@@ -342,7 +384,7 @@ func loadDefaultAgentToken() (string, error) {
 
 func printAgentUsage(w io.Writer, name string) {
 	fmt.Fprintf(w, "Usage: %s agent <subcommand> [options]\n", name)
-	fmt.Fprintln(w, "Subcommands: health, list, download, pause, resume, cancel, delete")
+	fmt.Fprintln(w, "Subcommands: health, list, get, download, pause, resume, cancel, delete, captures, profiler")
 }
 
 func printAgentSubcommandUsage(w io.Writer, name string, subcmd string) {
@@ -359,6 +401,203 @@ func printAgentDeleteUsage(w io.Writer, name string) {
 
 func printAgentIDActionUsage(w io.Writer, name string, action string) {
 	fmt.Fprintf(w, "Usage: %s agent %s [-agent <url>] <id>\n", name, action)
+}
+
+func runAgentCaptures(args []string, stdout io.Writer, stderr io.Writer, binName string) error {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		fmt.Fprintf(stderr, "Usage: %s agent captures <list|get|reject|start> [options]\n", binName)
+		return errors.New("captures subcommand is required")
+	}
+	switch args[0] {
+	case "list":
+		client, rest, err := newAgentClient(args[1:], stderr, binName, "captures list", true)
+		if err != nil {
+			return err
+		}
+		if len(rest) != 0 {
+			return errors.New("captures list does not accept positional arguments")
+		}
+		items, err := client.ListCaptures(context.Background())
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			fmt.Fprintln(stdout, "No captures.")
+			return nil
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.Before(items[j].CreatedAt) })
+		for _, c := range items {
+			fmt.Fprintf(stdout, "%s | %s | %s\n", c.ID, c.Status, c.Request.URL)
+		}
+		return nil
+	case "get":
+		normalized, err := normalizeAgentArgs(args[1:], map[string]bool{"agent": true}, 1)
+		if err != nil {
+			return err
+		}
+		client, rest, err := newAgentClient(normalized, stderr, binName, "captures get", true)
+		if err != nil {
+			return err
+		}
+		c, err := client.GetCapture(context.Background(), strings.TrimSpace(rest[0]))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "ID: %s\nStatus: %s\nURL: %s\n", c.ID, c.Status, c.Request.URL)
+		if c.Message != "" {
+			fmt.Fprintf(stdout, "Message: %s\n", c.Message)
+		}
+		return nil
+	case "reject":
+		normalized, err := normalizeAgentArgs(args[1:], map[string]bool{"agent": true}, 1)
+		if err != nil {
+			return err
+		}
+		client, rest, err := newAgentClient(normalized, stderr, binName, "captures reject", true)
+		if err != nil {
+			return err
+		}
+		c, err := client.RejectCapture(context.Background(), strings.TrimSpace(rest[0]))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Rejected capture: %s (%s)\n", c.ID, c.Status)
+		return nil
+	case "start":
+		normalized, err := normalizeAgentArgs(args[1:], map[string]bool{
+			"agent":            true,
+			"duplicate-action": true,
+			"o":                true,
+			"dir":              true,
+		}, 1)
+		if err != nil {
+			return err
+		}
+		fs := flag.NewFlagSet("agent captures start", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		agentURL := fs.String("agent", defaultAgentURL, "quickget-agent base URL")
+		duplicateAction := fs.String("duplicate-action", "new_name", "overwrite|new_name|show_existing")
+		output := fs.String("o", "", "output filename")
+		dir := fs.String("dir", "", "download directory")
+		if err := fs.Parse(normalized); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 {
+			return errors.New("captures start requires exactly one id")
+		}
+		token, err := loadDefaultAgentToken()
+		if err != nil {
+			return err
+		}
+		client := agentclient.New(*agentURL, token)
+		result, err := client.StartCaptureDownload(context.Background(), strings.TrimSpace(fs.Arg(0)), api.StartCaptureDownloadRequest{
+			OutputPath:      strings.TrimSpace(*output),
+			Directory:       strings.TrimSpace(*dir),
+			DuplicateAction: strings.TrimSpace(*duplicateAction),
+		})
+		if err != nil {
+			return err
+		}
+		if download, ok := result["download"].(map[string]any); ok {
+			fmt.Fprintf(stdout, "Started download: %v\n", download["id"])
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown captures subcommand: %s", args[0])
+	}
+}
+
+func runAgentProfiler(args []string, stdout io.Writer, stderr io.Writer, binName string) error {
+	if len(args) == 0 || isHelpArg(args[0]) {
+		fmt.Fprintf(stderr, "Usage: %s agent profiler <status|run|cancel> [options]\n", binName)
+		return errors.New("profiler subcommand is required")
+	}
+	switch args[0] {
+	case "status":
+		client, rest, err := newAgentClient(args[1:], stderr, binName, "profiler status", true)
+		if err != nil {
+			return err
+		}
+		if len(rest) != 0 {
+			return errors.New("profiler status does not accept positional arguments")
+		}
+		state, err := client.GetProfiler(context.Background())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Status: %v\n", state["status"])
+		if runID, ok := state["runId"]; ok {
+			fmt.Fprintf(stdout, "Run ID: %v\n", runID)
+		}
+		if lastErr, ok := state["lastError"]; ok && fmt.Sprint(lastErr) != "" {
+			fmt.Fprintf(stdout, "Last error: %v\n", lastErr)
+		}
+		return nil
+	case "run":
+		normalized, err := normalizeAgentArgs(args[1:], map[string]bool{
+			"agent":   true,
+			"level":   true,
+			"sizes":   true,
+			"repeats": true,
+			"url":     true,
+		}, 0)
+		if err != nil {
+			return err
+		}
+		fs := flag.NewFlagSet("agent profiler run", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		agentURL := fs.String("agent", defaultAgentURL, "quickget-agent base URL")
+		level := fs.String("level", "", "quick|normal|exhaustive")
+		sizes := fs.String("sizes", "", "comma-separated sizes (10MB,100MB,1GB)")
+		repeats := fs.Int("repeats", 0, "repeat count")
+		url := fs.String("url", "", "custom test URL")
+		if err := fs.Parse(normalized); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("profiler run does not accept positional arguments")
+		}
+		token, err := loadDefaultAgentToken()
+		if err != nil {
+			return err
+		}
+		client := agentclient.New(*agentURL, token)
+		req := map[string]any{}
+		if v := strings.TrimSpace(*level); v != "" {
+			req["level"] = v
+		}
+		if v := strings.TrimSpace(*sizes); v != "" {
+			req["sizes"] = v
+		}
+		if *repeats > 0 {
+			req["repeats"] = *repeats
+		}
+		if v := strings.TrimSpace(*url); v != "" {
+			req["url"] = v
+		}
+		state, err := client.RunProfiler(context.Background(), req)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Profiler status: %v\n", state["status"])
+		return nil
+	case "cancel":
+		client, rest, err := newAgentClient(args[1:], stderr, binName, "profiler cancel", true)
+		if err != nil {
+			return err
+		}
+		if len(rest) != 0 {
+			return errors.New("profiler cancel does not accept positional arguments")
+		}
+		state, err := client.CancelProfiler(context.Background())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Profiler status: %v\n", state["status"])
+		return nil
+	default:
+		return fmt.Errorf("unknown profiler subcommand: %s", args[0])
+	}
 }
 
 func normalizeAgentArgs(args []string, valueFlags map[string]bool, expectedPositionals int) ([]string, error) {
