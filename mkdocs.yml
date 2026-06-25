@@ -58,6 +58,7 @@ nav:
       - Agent API: agent-api.md
       - Desktop Engine Contract: desktop-engine-contract.md
       - Native Messaging Plan: native-messaging-plan.md
+      - Native Host: native-host.md
   - Testing:
       - User Playbook: testing/playbook.md
       - Contributor Tests: testing/contributor-tests.md
