@@ -24,14 +24,14 @@ type ProbeDownloadRequest struct {
 }
 
 type ProbeDownloadResponse struct {
-	URL                 string `json:"url"`
-	FinalURL            string `json:"final_url"`
-	SuggestedFilename   string `json:"suggested_filename"`
-	TotalBytes          int64  `json:"total_bytes,omitempty"`
-	RangeSupported      bool   `json:"range_supported"`
-	Status              string `json:"status,omitempty"`
-	StatusCode          int    `json:"status_code,omitempty"`
-	ContentDisposition  string `json:"content_disposition,omitempty"`
+	URL                string `json:"url"`
+	FinalURL           string `json:"final_url"`
+	SuggestedFilename  string `json:"suggested_filename"`
+	TotalBytes         int64  `json:"total_bytes,omitempty"`
+	RangeSupported     bool   `json:"range_supported"`
+	Status             string `json:"status,omitempty"`
+	StatusCode         int    `json:"status_code,omitempty"`
+	ContentDisposition string `json:"content_disposition,omitempty"`
 }
 
 type DownloadResponse struct {
