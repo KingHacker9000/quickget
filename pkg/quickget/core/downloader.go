@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -370,6 +371,88 @@ func preallocateFile(outputPath string, size int64) error {
 	return f.Truncate(size)
 }
 
+// retryableError marks a transient failure (rate limiting, 5xx, or a dropped
+// connection) that should be retried with backoff rather than permanently
+// failing the segment — and, in the worker pools, killing the goroutine.
+type retryableError struct {
+	err        error
+	retryAfter time.Duration // server-provided hint; 0 if absent
+}
+
+func (e *retryableError) Error() string { return e.err.Error() }
+func (e *retryableError) Unwrap() error { return e.err }
+
+// isRetryableStatus reports whether an HTTP status code represents a transient
+// server-side condition. 429 and 503 are the common rate-limit responses (many
+// hosts, e.g. uploadhaven, 503 when too many parallel range requests arrive);
+// 500/502/504 are transient gateway failures. Permanent client errors such as
+// 403/404/416 are deliberately excluded so they fail fast instead of looping.
+func isRetryableStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, // 429
+		http.StatusInternalServerError, // 500
+		http.StatusBadGateway,          // 502
+		http.StatusServiceUnavailable,  // 503
+		http.StatusGatewayTimeout:      // 504
+		return true
+	}
+	return false
+}
+
+// parseRetryAfter interprets a Retry-After header (delta-seconds or HTTP-date).
+func parseRetryAfter(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(raw); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(raw); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// backoffDelay computes an exponential backoff with full jitter. Jitter is the
+// critical part for concurrency-induced 503s: it desynchronizes the workers so
+// they stop retrying in lockstep, which lowers instantaneous concurrency and
+// lets a rate-limiting server recover instead of 503ing every request.
+func backoffDelay(attempt int, base, max time.Duration) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	d := base << (attempt - 1)
+	if d <= 0 || d > max {
+		d = max
+	}
+	half := d / 2
+	if half <= 0 {
+		return d
+	}
+	return half + time.Duration(rand.Int63n(int64(half)+1))
+}
+
+// sleepCtx waits for d or until ctx is cancelled, whichever comes first.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 func downloadSegment(ctx context.Context, client *http.Client, rawURL string, outputPath string, task manifest.SegmentTask, downloaded *int64, chunkDownloaded *int64, bufPool *sync.Pool, stats *progress.DownloadStats, headers http.Header, userAgent string, mutations *int64) error {
 	if task.End < task.Start {
 		return fmt.Errorf("invalid range %d-%d", task.Start, task.End)
@@ -384,11 +467,19 @@ func downloadSegment(ctx context.Context, client *http.Client, rawURL string, ou
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		// A transport-level error (dropped connection, reset, timeout) on a URL
+		// we already validated is virtually always transient; retry it.
+		return &retryableError{err: err}
 	}
 	defer resp.Body.Close()
 
 	byteRange := fmt.Sprintf("bytes=%d-%d", task.Start, task.End)
+	if isRetryableStatus(resp.StatusCode) {
+		return &retryableError{
+			err:        fmt.Errorf("server returned %d for %s (%s); try lowering -n (for example 2 or 4)", resp.StatusCode, rawURL, byteRange),
+			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		}
+	}
 	if err := probe.ExplainServerStatus(resp.StatusCode, true, byteRange, rawURL); err != nil {
 		return err
 	}
@@ -429,7 +520,10 @@ func downloadSegment(ctx context.Context, client *http.Client, rawURL string, ou
 			break
 		}
 		if readErr != nil {
-			return readErr
+			// A mid-stream read failure is a dropped connection; the bytes
+			// written so far are persisted by offset (WriteAt) and the manifest's
+			// completed ranges, so retrying the segment resumes safely.
+			return &retryableError{err: readErr}
 		}
 	}
 
@@ -437,21 +531,58 @@ func downloadSegment(ctx context.Context, client *http.Client, rawURL string, ou
 }
 
 func downloadSegmentWithRetry(ctx context.Context, client *http.Client, rawURL string, outputPath string, task manifest.SegmentTask, downloaded *int64, chunkDownloaded *int64, maxRetries int, bufPool *sync.Pool, stats *progress.DownloadStats, headers http.Header, userAgent string, mutations *int64) error {
+	const (
+		baseBackoff = 500 * time.Millisecond
+		maxBackoff  = 30 * time.Second
+	)
+	// Transient failures (rate limiting / 5xx / dropped connections) get a
+	// generous retry budget with jittered backoff so a worker survives a 503
+	// storm instead of dying and collapsing the pool (24 -> 3 -> 1). Permanent
+	// failures (403/404/416) use the small maxRetries budget and fail fast.
+	maxTransientRetries := maxRetries
+	if maxTransientRetries < 12 {
+		maxTransientRetries = 12
+	}
+
 	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	permAttempts := 0
+	transientAttempts := 0
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
-		}
-		if attempt > 0 {
-			time.Sleep(time.Second)
 		}
 		err := downloadSegment(ctx, client, rawURL, outputPath, task, downloaded, chunkDownloaded, bufPool, stats, headers, userAgent, mutations)
 		if err == nil {
 			return nil
 		}
 		lastErr = err
+
+		var re *retryableError
+		if errors.As(err, &re) {
+			transientAttempts++
+			if transientAttempts > maxTransientRetries {
+				return lastErr
+			}
+			delay := backoffDelay(transientAttempts, baseBackoff, maxBackoff)
+			if re.retryAfter > 0 {
+				// Honor the server hint, plus a little jitter so workers that
+				// all received the same Retry-After don't wake in lockstep.
+				delay = re.retryAfter + time.Duration(rand.Int63n(int64(baseBackoff)+1))
+			}
+			if err := sleepCtx(ctx, delay); err != nil {
+				return err
+			}
+			continue
+		}
+
+		permAttempts++
+		if permAttempts > maxRetries {
+			return lastErr
+		}
+		if err := sleepCtx(ctx, backoffDelay(permAttempts, baseBackoff, maxBackoff)); err != nil {
+			return err
+		}
 	}
-	return lastErr
 }
 
 func downloadSingle(ctx context.Context, client *http.Client, rawURL string, outputPath string, totalSize int64, bufferSize int, headers http.Header, userAgent string, out io.Writer, reporter progress.Reporter, progressIntervalMs int) error {
