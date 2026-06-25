@@ -110,6 +110,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleDownloadsCollection(w, r)
 		return
 	}
+	if r.URL.Path == "/downloads/probe" {
+		s.handleDownloadsProbe(w, r)
+		return
+	}
 	if r.URL.Path == "/captures" {
 		s.handleCapturesCollection(w, r)
 		return
@@ -154,6 +158,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeError(w, http.StatusNotFound, "not_found", "route not found")
+}
+
+func (s *Server) handleDownloadsProbe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	req, ok := decodeJSONBody[api.ProbeDownloadRequest](w, r)
+	if !ok {
+		return
+	}
+	result, err := s.manager.ProbeDownload(req)
+	if err != nil {
+		writeManagerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func applyCORSHeaders(w http.ResponseWriter, r *http.Request) {

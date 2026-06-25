@@ -1,0 +1,447 @@
+﻿===== quickget cli: version =====
+agentgrep 0.1.1
+
+===== index =====
+Index written:
+- files indexed: 139
+- roles counted: source:105, test:4, doc:14, config:3, other:13
+- symbols indexed: 0
+- symbol kinds: none
+- symbol references indexed: 0
+- connections counted: 2515
+- index path: C:/Dev/Projects/QuickGet/QuickGet_CLI/.git/agentgrep/index.json
+- repo rev: 736644b
+
+===== index status =====
+Index status: fresh
+- index path: C:/Dev/Projects/QuickGet/QuickGet_CLI/.git/agentgrep/index.json
+- files indexed: 139
+- roles counted: source:105, test:4, doc:14, config:3, other:13
+- symbols indexed: 0
+- symbol kinds: none
+- symbol references indexed: 0
+- connections counted: 2515
+- repo rev: 736644b
+- indexed rev: 736644b
+
+===== find download =====
+Top candidates:
+1. site/agent-api/index.html    role source    score 0.82    confidence high
+   Lines: 703, 706, 714, 717, 725, ...
+   Snippets:
+   - 703: <a href="#get-downloads" class="md-nav__link">
+   - 706: GET /downloads
+   - 714: <a href="#post-downloads" class="md-nav__link">
+   Why: indexed edge likely_test_for filename stem matches; indexed edge likely_test_for filename stem matches; indexed edge same_area shared source area site; matched 'download' in snippet; ...
+
+2. site/agent-architecture/index.html    role source    score 0.82    confidence high
+   Lines: 1095, 1097, 1100-1101, 1106, 1127-1133, ...
+   Snippets:
+   - 1106: - A future Tauri desktop app will start (or connect to) <code>quickget-agent</code> a...
+   - 1162: <li>Scope: orchestration-level state across downloads.</li>
+   - 1101: <p>The downloader engine remains the download executor. The agent is the orchestratio...
+   Why: indexed edge likely_test_for filename stem matches; indexed edge likely_test_for filename stem matches; indexed edge same_area shared source area site; matched 'download' in snippet; ...
+
+3. site/cli-reference/index.html    role source    score 0.82    confidence high
+   Lines: 390, 393, 412, 415, 1050, ...
+   Snippets:
+   - 390: <a href="#download-flags" class="md-nav__link">
+   - 393: Download Flags
+   - 412: <a href="#download" class="md-nav__link">
+   Why: indexed edge likely_test_for filename stem matches; indexed edge likely_test_for filename stem matches; indexed edge same_area shared source area site; matched 'download' in snippet; ...
+
+4. cmd/quickget-agent/main.go    role source    score 0.80    confidence high
+   Lines: 125, 173
+   Snippets:
+   - 125: pauseActiveDownloads(mgr, *verbose)
+   - 173: func pauseActiveDownloads(mgr *agent.Manager, verbose bool) {
+   Why: indexed edge configures manifest or config points at source root; indexed edge configures manifest or config points at source root; indexed edge configures manifest or config points at source root; matched 'download' in snippet; ...
+
+5. pkg/quickget/agent/capture_test.go    role source    score 0.79    confidence high
+   Lines: 13, 35, 40, 42, 48, ...
+   Snippets:
+   - 13: dl := newFakeDownloader()
+   - 35: startReq := api.StartCaptureDownloadRequest{
+   - 48: t.Fatal("expected download snapshot id")
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'download' in snippet; ...
+
+6. pkg/quickget/agent/job.go    role source    score 0.79    confidence high
+   Lines: 23, 31, 61-62, 68, 84, ...
+   Snippets:
+   - 23: type DownloadJob struct {
+   - 31: Downloaded int64
+   - 68: Downloaded: j.Downloaded,
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'download' in snippet; ...
+
+7. pkg/quickget/agent/manager.go    role source    score 0.79    confidence high
+   Lines: 29-30, 33, 35-36, 47, 52, ...
+   Snippets:
+   - 47: jobs map[string]*DownloadJob
+   - 52: dl Downloader
+   - 62: jobs: make(map[string]*DownloadJob),
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'download' in snippet; ...
+
+8. pkg/quickget/agent/manager_test.go    role source    score 0.79    confidence high
+   Lines: 51, 55-56, 64, 68-69, 75-76, ...
+   Snippets:
+   - 51: func (s *fakeStore) hasSavedProgress(id string, downloaded int64) bool {
+   - 64: type fakeDownloader struct {
+   - 79: func (f *fakeDownloader) Download(ctx context.Context, opts quickget.DownloadOptions,...
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'download' in snippet; ...
+
+Next:
+- open site/agent-api/index.html
+- open site/agent-architecture/index.html
+- open site/cli-reference/index.html
+
+Search coverage:
+- raw rg matches: 669
+- raw candidate files: 78
+- displayed candidates: 8
+- limited: yes
+- match limit per file: 20
+- candidate limit: 8
+- index used: true
+- index status: fresh
+
+===== find command =====
+Top candidates:
+1. site/cli-reference/index.html    role source    score 0.82    confidence high
+   Lines: 379, 382, 401, 404, 1039, ...
+   Snippets:
+   - 379: <a href="#command-forms" class="md-nav__link">
+   - 382: Command Forms
+   - 401: <a href="#command-details" class="md-nav__link">
+   Why: indexed edge likely_test_for filename stem matches; indexed edge likely_test_for filename stem matches; indexed edge same_area shared source area site; matched 'command' in snippet; ...
+
+2. pkg/quickget/cli/agent.go    role source    score 0.79    confidence high
+   Lines: 22, 26, 56, 66, 85, ...
+   Snippets:
+   - 22: func runAgentCommand(args []string, stdout io.Writer, stderr io.Writer, binName strin...
+   - 26: return errors.New("agent subcommand is required")
+   - 56: return fmt.Errorf("unknown agent subcommand: %s", args[0])
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'command' in snippet; ...
+
+3. pkg/quickget/cli/cli.go    role source    score 0.79    confidence high
+   Lines: 37, 47, 49, 51, 53, ...
+   Snippets:
+   - 37: return errors.New("no command or URL provided")
+   - 298: func runInspectCommand(args []string, stdout io.Writer, stderr io.Writer, binName str...
+   - 324: func runFileStatsCommand(args []string, stdout io.Writer, stderr io.Writer, binName s...
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'command' in snippet; ...
+
+4. site/agent-architecture/index.html    role source    score 0.79    confidence high
+   Lines: 1104, 1107
+   Snippets:
+   - 1104: - <code>quickget</code> CLI remains a direct command-line tool for immediate operations.
+   - 1107: - A future Chrome native host integration will forward captured URLs/commands to <cod...
+   Why: indexed edge likely_test_for filename stem matches; indexed edge likely_test_for filename stem matches; indexed edge same_area shared source area site; matched 'command' in snippet; ...
+
+5. site/deep-dive/resume-manifest/index.html    role source    score 0.79    confidence high
+   Lines: 576, 579, 587, 590, 997, ...
+   Snippets:
+   - 576: <a href="#status-command-semantics" class="md-nav__link">
+   - 579: status Command Semantics
+   - 587: <a href="#clean-command-semantics" class="md-nav__link">
+   Why: indexed edge same_area shared source area site; indexed edge same_area shared source area site; indexed edge same_area shared source area site; matched 'command' in snippet; ...
+
+6. pkg/quickget/core/downloader.go    role source    score 0.76    confidence high
+   Lines: 989, 1001
+   Snippets:
+   - 989: cmd := exec.Command("powershell", "-NoProfile", "-Command", fmt.Sprintf("[int64](Get-...
+   - 1001: cmd := exec.Command("df", "-Pk", checkPath)
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'command' in snippet; ...
+
+7. pkg/quickget/nativehost/install.go    role source    score 0.76    confidence high
+   Lines: 74, 92
+   Snippets:
+   - 74: cmd := exec.Command("reg", "add", regKey, "/ve", "/t", "REG_SZ", "/d", manifestPath, ...
+   - 92: _ = exec.Command("reg", "delete", regKey, "/f").Run()
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'command' in snippet; ...
+
+8. site/deep-dive/architecture/index.html    role source    score 0.76    confidence high
+   Lines: 1053, 1096
+   Snippets:
+   - 1053: <li><code>pkg/quickget/cli</code>: command routing, flag parsing, usage output.</li>
+   - 1096: <li>Re-running same command resumes missing ranges.</li>
+   Why: indexed edge same_area shared source area site; indexed edge same_area shared source area site; indexed edge same_area shared source area site; matched 'command' in snippet; ...
+
+Next:
+- open site/cli-reference/index.html
+- open pkg/quickget/cli/agent.go
+- open pkg/quickget/cli/cli.go
+
+Search coverage:
+- raw rg matches: 110
+- raw candidate files: 39
+- displayed candidates: 8
+- limited: yes
+- match limit per file: 20
+- candidate limit: 8
+- index used: true
+- index status: fresh
+
+===== find url =====
+Top candidates:
+1. site/agent-api/index.html    role source    score 0.62    confidence medium
+   Lines: 56, 1245, 1271, 1283, 1290, ...
+   Snippets:
+   - 56: <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e...
+   - 1245: <p>Base URL:</p>
+   - 1271: <div class="highlight"><pre><span></span><code>curl<span class="w"> </span>http://127...
+   Why: indexed edge likely_test_for filename stem matches; indexed edge likely_test_for filename stem matches; indexed edge same_area shared source area site; matched 'url' in snippet; ...
+
+2. pkg/quickget/agent/capture_test.go    role source    score 0.59    confidence high
+   Lines: 23, 59, 84, 116, 128-129
+   Snippets:
+   - 116: URL: srv.URL + "/download?id=42",
+   - 23: URL: "https://unit.test/file.bin",
+   - 59: URL: "https://unit.test/file.bin",
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'url' in snippet; ...
+
+3. pkg/quickget/agent/job.go    role source    score 0.59    confidence high
+   Lines: 25, 53, 58, 64
+   Snippets:
+   - 25: URL string
+   - 53: return base64.RawURLEncoding.EncodeToString(buf)
+   - 58: return fmt.Sprintf("%d-%s", time.Now().UnixNano(), base64.RawURLEncoding.EncodeToStri...
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'url' in snippet; ...
+
+4. pkg/quickget/agent/manager.go    role source    score 0.59    confidence high
+   Lines: 76, 80, 84, 104, 202, ...
+   Snippets:
+   - 76: req.URL = strings.TrimSpace(req.URL)
+   - 80: req.FinalURL = strings.TrimSpace(req.FinalURL)
+   - 84: req.PageURL = strings.TrimSpace(req.PageURL)
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'url' in snippet; ...
+
+5. pkg/quickget/agent/output_name_test.go    role source    score 0.59    confidence high
+   Lines: 5, 8, 11-15, 20, 22
+   Snippets:
+   - 8: rawURL string
+   - 5: func TestDeriveSafeOutputFilenameFromURL(t *testing.T) {
+   - 22: t.Fatalf("deriveSafeOutputFilenameFromURL(%q)=%q want %q", tc.rawURL, got, tc.want)
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'url' in snippet; ...
+
+6. pkg/quickget/agent/profiler.go    role source    score 0.59    confidence high
+   Lines: 17, 54, 85-87, 90, 102, ...
+   Snippets:
+   - 17: profilerDefaultURL = "https://proof.ovh.net/files/1Gb.dat"
+   - 54: URL string `json:"url,omitempty"`
+   - 90: configs := buildProfilerConfigs(level, sourceURL, sizes)
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'url' in snippet; ...
+
+7. pkg/quickget/agent/server.go    role source    score 0.59    confidence high
+   Lines: 95, 109, 113, 117, 122, ...
+   Snippets:
+   - 95: if r.URL.Path == "/health" {
+   - 109: if r.URL.Path == "/downloads" {
+   - 113: if r.URL.Path == "/downloads/probe" {
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'url' in snippet; ...
+
+8. pkg/quickget/agent/server_integration_test.go    role source    score 0.59    confidence high
+   Lines: 45, 47, 67, 69-70, 90, ...
+   Snippets:
+   - 90: resp, err := client.Get(srv.URL + "/health")
+   - 108: resp, err := client.Get(srv.URL + "/downloads")
+   - 121: created = createJob(t, client, srv.URL)
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'url' in snippet; ...
+
+Next:
+- open site/agent-api/index.html
+- open pkg/quickget/agent/capture_test.go
+- open pkg/quickget/agent/job.go
+
+Search coverage:
+- raw rg matches: 468
+- raw candidate files: 74
+- displayed candidates: 8
+- limited: yes
+- match limit per file: 20
+- candidate limit: 8
+- index used: true
+- index status: fresh
+
+===== find progress =====
+Top candidates:
+1. pkg/quickget/progress/progress.go    role source    score 5.10    confidence medium
+   Lines: 1, 90, 114, 118, 128, ...
+   Snippets:
+   - 1: package progress
+   - 90: func StartProgressLoop(
+   - 114: renderProgress(w, current, totalSize, start)
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; filename token matches 'progress'; ...
+
+2. pkg/quickget/agent/progress_config.go    role config    score 5.10    confidence medium
+   Lines: 8, 12-15, 18-19, 21, 25, ...
+   Snippets:
+   - 8: "quickget/pkg/quickget/progress"
+   - 34: raw := strings.TrimSpace(strings.ToLower(os.Getenv(debugProgressEnv)))
+   - 15: progressPersistIntervalMs = 1000
+   Why: indexed edge configures manifest or config points at source root; filename token matches 'progress'; matched 'progress' in snippet; filename stem matches 'progress'; ...
+
+3. site/agent-api/index.html    role source    score 0.81    confidence high
+   Lines: 1411-1412, 1419, 1431-1432
+   Snippets:
+   - 1419: <li><code>download.progress</code></li>
+   - 1412: data: {&quot;type&quot;:&quot;download.progress&quot;,&quot;id&quot;:&quot;d_abc123&q...
+   - 1432: data: {&quot;type&quot;:&quot;download.progress&quot;,&quot;id&quot;:&quot;d_abc123&q...
+   Why: indexed edge likely_test_for filename stem matches; indexed edge likely_test_for filename stem matches; indexed edge same_area shared source area site; matched 'progress' in snippet; ...
+
+4. pkg/quickget/agent/eventbus.go    role source    score 0.79    confidence high
+   Lines: 25, 33, 102-103, 112, 114
+   Snippets:
+   - 25: progressPublished int64
+   - 33: debug: debugProgressEnabled(),
+   - 103: b.debugWindow.progressPublished++
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'progress' in snippet; ...
+
+5. pkg/quickget/agent/manager.go    role source    score 0.79    confidence high
+   Lines: 53-54, 68-69, 677, 869, 877-878, ...
+   Snippets:
+   - 677: Segments: append([]api.SegmentProgress(nil), snap.Segments...),
+   - 869: req.ProgressIntervalMs = m.progressIntervalMs
+   - 882: var publishedProgressEventsThisWindow int64
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'progress' in snippet; ...
+
+6. pkg/quickget/agent/manager_test.go    role source    score 0.79    confidence high
+   Lines: 16, 51, 68, 83, 96, ...
+   Snippets:
+   - 16: "quickget/pkg/quickget/progress"
+   - 51: func (s *fakeStore) hasSavedProgress(id string, downloaded int64) bool {
+   - 68: progress []quickget.DownloadEvent
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'progress' in snippet; ...
+
+7. pkg/quickget/agent/server.go    role source    score 0.79    confidence high
+   Lines: 480, 482, 518-519, 524, 526, ...
+   Snippets:
+   - 529: if progressWritten == 0 {
+   - 532: return float64(segmentCount) / float64(progressWritten)
+   - 536: progressWritten = 0
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'progress' in snippet; ...
+
+8. pkg/quickget/cli/cli.go    role source    score 0.79    confidence high
+   Lines: 17, 118, 120, 194, 202, ...
+   Snippets:
+   - 17: "quickget/pkg/quickget/progress"
+   - 194: verbose := fs.Bool("v", false, "verbose progress output (includes per-chunk status)")
+   - 202: jsonEvents := fs.Bool("json-events", false, "emit newline-delimited JSON progress eve...
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'progress' in snippet; ...
+
+Next:
+- open pkg/quickget/progress/progress.go
+- open pkg/quickget/agent/progress_config.go
+- open site/agent-api/index.html
+
+Search coverage:
+- raw rg matches: 176
+- raw candidate files: 40
+- displayed candidates: 8
+- limited: yes
+- match limit per file: 20
+- candidate limit: 8
+- index used: true
+- index status: fresh
+
+===== find config =====
+Top candidates:
+1. pkg/quickget/agent/profiler.go    role source    score 0.79    confidence high
+   Lines: 90-92, 98, 104-105, 108, 156, ...
+   Snippets:
+   - 98: "step_total": len(configs)*repeats + 2,
+   - 108: for _, cfg := range configs {
+   - 156: func buildProfilerConfigs(level, url string, sizes []string) []bench.BenchmarkConfig {
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'config' in snippet; ...
+
+2. pkg/quickget/bench/bench.go    role source    score 0.79    confidence high
+   Lines: 19, 83-84, 88-91, 93, 118, ...
+   Snippets:
+   - 19: type BenchmarkConfig struct {
+   - 118: key := benchmarkConfigDedupKey(cfg)
+   - 131: func benchmarkConfigDedupKey(cfg BenchmarkConfig) string {
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'config' in snippet; ...
+
+3. pkg/quickget/bench/bench_test.go    role source    score 0.79    confidence high
+   Lines: 41, 65-66, 70, 72, 75, ...
+   Snippets:
+   - 41: res := RunBenchmark(context.Background(), BenchmarkConfig{
+   - 75: t.Fatalf("unexpected remaining config: %#v", got[0])
+   - 89: t.Fatalf("unexpected remaining config: %#v", got[0])
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'config' in snippet; ...
+
+4. pkg/quickget/cli/agent_test.go    role source    score 0.79    confidence high
+   Lines: 17, 20, 26, 28, 42, ...
+   Snippets:
+   - 20: t.Setenv("XDG_CONFIG_HOME", root)
+   - 42: setUserConfigEnv(t, root)
+   - 69: setUserConfigEnv(t, root)
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'config' in snippet; ...
+
+5. pkg/quickget/cli/benchmark.go    role source    score 0.79    confidence high
+   Lines: 88, 95, 111, 115, 119, ...
+   Snippets:
+   - 88: base := make([]bench.BenchmarkConfig, 0, len(sizes)*len(connections)*len(segmentSizes...
+   - 95: base = append(base, bench.BenchmarkConfig{
+   - 111: pruned, stats := bench.PruneBenchmarkConfigsWithStats(base)
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'config' in snippet; ...
+
+6. pkg/quickget/cli/profile.go    role source    score 0.79    confidence high
+   Lines: 43, 51-52, 99, 105-107, 212-213, ...
+   Snippets:
+   - 43: type profileLevelConfig struct {
+   - 99: func (c *profileRunCollector) run(cfg bench.BenchmarkConfig) bench.BenchmarkResult {
+   - 220: return errors.New("no runnable exhaustive configurations after pruning")
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'config' in snippet; ...
+
+7. pkg/quickget/nativehost/host.go    role source    score 0.79    confidence high
+   Lines: 71, 306, 323, 326-327, 329, ...
+   Snippets:
+   - 71: type hostConfig struct {
+   - 306: cfg, _ := loadConfig()
+   - 323: return errors.New("quickget-agent is not running. Start QuickGet Download Manager or ...
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'config' in snippet; ...
+
+8. pkg/quickget/nativehost/install.go    role source    score 0.79    confidence high
+   Lines: 20, 24, 76, 79
+   Snippets:
+   - 20: RegistryConfigured bool
+   - 24: cfgDir, err := os.UserConfigDir()
+   - 76: return InstallResult{ManifestPath: manifestPath, RegistryConfigured: false}, nil
+   Why: indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; indexed edge same_area shared source area pkg; matched 'config' in snippet; ...
+
+Next:
+- open pkg/quickget/agent/profiler.go
+- open pkg/quickget/bench/bench.go
+- open pkg/quickget/bench/bench_test.go
+
+Search coverage:
+- raw rg matches: 169
+- raw candidate files: 49
+- displayed candidates: 8
+- limited: yes
+- match limit per file: 20
+- candidate limit: 8
+- index used: true
+- index status: fresh
+
+===== symbol main =====
+Symbol query: main
+- index status: fresh
+- match mode: none
+Matches: none
+Next:
+- agentgrep find "main"
+
+===== symbol download =====
+Symbol query: download
+- index status: fresh
+- match mode: none
+Matches: none
+Next:
+- agentgrep find "download"
+
+===== git status =====
+ M cmd/quickget-native-host/main.go
+ M pkg/quickget/nativehost/install.go
+?? .codex-cleanup/
+?? manual-test/

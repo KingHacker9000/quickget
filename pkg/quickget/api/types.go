@@ -17,6 +17,23 @@ type CreateDownloadRequest struct {
 	HTTP1       bool              `json:"http1"`
 }
 
+type ProbeDownloadRequest struct {
+	URL       string            `json:"url"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	UserAgent string            `json:"userAgent,omitempty"`
+}
+
+type ProbeDownloadResponse struct {
+	URL                string `json:"url"`
+	FinalURL           string `json:"final_url"`
+	SuggestedFilename  string `json:"suggested_filename"`
+	TotalBytes         int64  `json:"total_bytes,omitempty"`
+	RangeSupported     bool   `json:"range_supported"`
+	Status             string `json:"status,omitempty"`
+	StatusCode         int    `json:"status_code,omitempty"`
+	ContentDisposition string `json:"content_disposition,omitempty"`
+}
+
 type DownloadResponse struct {
 	ID         string    `json:"id"`
 	URL        string    `json:"url"`

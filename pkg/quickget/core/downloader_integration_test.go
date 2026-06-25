@@ -86,11 +86,21 @@ func TestDownloadIntegration_ServerIgnoresRange(t *testing.T) {
 	}
 }
 
-func TestDownloadIntegration_RateLimitedRangeRequests(t *testing.T) {
-	tests := []int{http.StatusTooManyRequests, http.StatusForbidden, http.StatusServiceUnavailable}
+// TestDownloadIntegration_RateLimitedRangeRecovers verifies that transient
+// rate-limit responses (429/503) are retried with backoff and the download
+// recovers, instead of permanently failing the segment. Previously a single
+// rate-limited segment killed its worker goroutine, so under a 503 storm the
+// pool collapsed from many connections down to a handful and throughput
+// cratered.
+func TestDownloadIntegration_RateLimitedRangeRecovers(t *testing.T) {
+	tests := []int{http.StatusTooManyRequests, http.StatusServiceUnavailable}
 	for _, status := range tests {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			data := testPayloadBytes(96 * 1024)
+			// Reject the first few ranged GETs, then serve normally to simulate
+			// a server that recovers once retry pressure eases.
+			const failFirst = 3
+			var rangedHits atomic.Int64
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method {
 				case http.MethodHead:
@@ -101,17 +111,53 @@ func TestDownloadIntegration_RateLimitedRangeRequests(t *testing.T) {
 					if r.Header.Get("Range") == "" {
 						t.Fatalf("expected Range header on GET")
 					}
-					w.WriteHeader(status)
+					if rangedHits.Add(1) <= failFirst {
+						w.WriteHeader(status)
+						return
+					}
+					serveRangedBytes(t, w, r, data, http.StatusPartialContent)
 				default:
 					t.Fatalf("unexpected method: %s", r.Method)
 				}
 			}))
 			defer srv.Close()
 
-			_, err := runDownload(t, context.Background(), srv.URL, nil, 2, 0, false, 0, t.TempDir())
-			assertErrorContains(t, err, "try lowering -n")
+			outPath := runDownloadSuccess(t, context.Background(), srv.URL, nil, 2, 3, false, 0, t.TempDir())
+			got := readFile(t, outPath)
+			if !bytes.Equal(got, data) {
+				t.Fatalf("recovered download bytes mismatch: got=%d want=%d", len(got), len(data))
+			}
+			if rangedHits.Load() <= failFirst {
+				t.Fatalf("expected rate-limited responses before recovery, got %d hits", rangedHits.Load())
+			}
 		})
 	}
+}
+
+// TestDownloadIntegration_ForbiddenRangeRequests verifies that a 403 (treated
+// as a permanent/auth failure, not a transient rate limit) fails fast with
+// actionable guidance rather than being retried.
+func TestDownloadIntegration_ForbiddenRangeRequests(t *testing.T) {
+	data := testPayloadBytes(96 * 1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodHead:
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			if r.Header.Get("Range") == "" {
+				t.Fatalf("expected Range header on GET")
+			}
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+	}))
+	defer srv.Close()
+
+	_, err := runDownload(t, context.Background(), srv.URL, nil, 2, 0, false, 0, t.TempDir())
+	assertErrorContains(t, err, "try lowering -n")
 }
 
 func TestDownloadIntegration_InvalidRange416(t *testing.T) {

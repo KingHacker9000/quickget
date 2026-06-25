@@ -20,6 +20,14 @@ type InstallResult struct {
 	RegistryConfigured bool
 }
 
+func chromeManifestPath() (string, error) {
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(cfgDir, "QuickGet", "native-host", ChromeHostName+".json"), nil
+}
+
 func InstallChrome(hostExecutablePath string, allowedOrigins []string) (InstallResult, error) {
 	if runtime.GOOS != "windows" {
 		return InstallResult{}, errors.New("install-chrome is currently supported on Windows only")
@@ -38,15 +46,14 @@ func InstallChrome(hostExecutablePath string, allowedOrigins []string) (InstallR
 		return InstallResult{}, err
 	}
 
-	cfgDir, err := os.UserConfigDir()
+	manifestPath, err := chromeManifestPath()
 	if err != nil {
 		return InstallResult{}, err
 	}
-	manifestDir := filepath.Join(cfgDir, "QuickGet", "native-host")
+	manifestDir := filepath.Dir(manifestPath)
 	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
 		return InstallResult{}, err
 	}
-	manifestPath := filepath.Join(manifestDir, ChromeHostName+".json")
 	manifest := map[string]any{
 		"name":            ChromeHostName,
 		"description":     "QuickGet native messaging host",
@@ -76,19 +83,14 @@ func UninstallChrome() error {
 	if runtime.GOOS != "windows" {
 		return errors.New("uninstall-chrome is currently supported on Windows only")
 	}
-	cfgDir, err := os.UserConfigDir()
+	manifestPath, err := chromeManifestPath()
 	if err != nil {
 		return err
 	}
-	manifestPath := filepath.Join(cfgDir, "QuickGet", "native-host", ChromeHostName+".json")
 	_ = os.Remove(manifestPath)
 	regKey := `HKCU\Software\Google\Chrome\NativeMessagingHosts\` + ChromeHostName
 	_ = exec.Command("reg", "delete", regKey, "/f").Run()
 	return nil
-}
-
-func InstallHelp(exePath string) string {
-	return fmt.Sprintf("If registry registration failed, create key HKCU\\\\Software\\\\Google\\\\Chrome\\\\NativeMessagingHosts\\\\%s with default value set to manifest path. Executable: %s", ChromeHostName, exePath)
 }
 
 func normalizeAllowedOrigins(origins []string) ([]string, error) {
