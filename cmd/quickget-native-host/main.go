@@ -84,7 +84,7 @@ func runInstallChrome(args []string) error {
 		fmt.Fprintln(os.Stderr, "Chrome registry key registered.")
 	} else {
 		fmt.Fprintln(os.Stderr, "Registry registration failed; manual registry setup required.")
-		fmt.Fprintln(os.Stderr, nativehost.InstallHelp(path))
+		fmt.Fprintf(os.Stderr, "Create HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\%s with the default value set to the manifest path. Executable: %s\n", nativehost.ChromeHostName, path)
 	}
 	return nil
 }

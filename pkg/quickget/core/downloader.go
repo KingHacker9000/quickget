@@ -813,16 +813,14 @@ func downloadParallel(ctx context.Context, client *http.Client, rawURL string, o
 				}
 				atomic.AddInt32(&activeChunkWorkers[task.ChunkIndex], -1)
 
+				// In-memory update only; the periodic saver and the final save
+				// persist to disk. A synchronous per-segment full-manifest save
+				// here serializes every worker behind one disk rewrite.
 				manifestMu.Lock()
 				c := &m.Chunks[task.ChunkIndex]
 				c.CompletedRanges = append(c.CompletedRanges, manifest.ByteRange{Start: task.Start, End: task.End})
 				manifest.NormalizeChunk(c)
-				saveErr := manifest.Save(mPath, &m)
 				manifestMu.Unlock()
-				if saveErr != nil {
-					errChan <- fmt.Errorf("chunk %d manifest save failed: %w", task.ChunkIndex, saveErr)
-					return
-				}
 			}
 		}()
 	}
@@ -884,16 +882,16 @@ func runQueueMode(ctx context.Context, client *http.Client, rawURL string, outpu
 				}
 				atomic.AddInt32(&activeChunkWorkers[task.ChunkIndex], -1)
 
+				// Record completion in memory only. Persisting the manifest is
+				// handled by the periodic saver goroutine and the final save below;
+				// doing a full-manifest marshal+rewrite here (per segment, under a
+				// global lock) serializes all workers behind disk I/O and destroys
+				// throughput when slices are small. See runQueueMode/downloadParallel.
 				manifestMu.Lock()
 				c := &m.Chunks[task.ChunkIndex]
 				c.CompletedRanges = append(c.CompletedRanges, manifest.ByteRange{Start: task.Start, End: task.End})
 				manifest.NormalizeChunk(c)
-				saveErr := manifest.Save(mPath, m)
 				manifestMu.Unlock()
-				if saveErr != nil {
-					errChan <- fmt.Errorf("segment %d manifest save failed: %w", task.ChunkIndex, saveErr)
-					return
-				}
 			}
 		}()
 	}
